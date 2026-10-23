@@ -14,11 +14,12 @@ this is not Android, a container inside Android, or a desktop phone OS.
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](LICENSE)
 [![Device: Xiaomi Mi 8 Lite](https://img.shields.io/badge/device-Xiaomi_Mi_8_Lite-ff6900)](docs/HARDWARE.md)
 
-**Verified integration: 0.3.0** · **Kernel: 7.2.12-r1 / 7.2.12-sdm660** · **Development / early hardware testing**
+**Verified existing-installation integration: 0.3.1** · **Kernel: 7.2.12-r1 / 7.2.12-sdm660** · **Development / early hardware testing**
 
 **Source/build integration: 0.3.1.** Fresh image builds include both screens,
-display helpers and the shutdown service. This packaging update has not been
-flashed to the tested phone; its installed integration remains 0.3.0.
+display helpers and the shutdown service. The tested phone was updated in place
+to 0.3.1, with screen preview and normal restart verified. The newly built full
+installation image passed offline audits and has not been flashed as a full image.
 
 [Installation](docs/INSTALLATION.md) · [Build from source](docs/BUILDING.md)
 · [Display development](docs/DISPLAY.md) · [Shutdown](docs/SHUTDOWN.md)

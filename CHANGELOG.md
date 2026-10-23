@@ -7,8 +7,9 @@
 - Image audits verify decoded screens, file hashes, permissions and service links.
 - Exported boot images automatically receive module indexes matching the actual
   initramfs contents; the final boot/rootfs pair is audited before build success.
-- A full local image passed offline audits. This image has not been flashed or
-  physically tested; the tested phone remains on integration 0.3.0.
+- A full local image passed offline audits. The existing installation was updated
+  in place to 0.3.1: screen preview, normal restart, runtime checksums, SSH and
+  service autostart passed. The new full installation image was not flashed.
 
 ## 0.3.0 — verified shutdown buttons and screen
 

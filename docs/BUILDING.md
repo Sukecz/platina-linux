@@ -1,7 +1,7 @@
 # Building Platina Linux
 
-This is a source-only development port. Integration 0.3.0 and kernel 7.2.12-r1
-were physically tested on a Tianma Mi 8 Lite. Source version 0.3.1 integrates
+This is a source-only development port. Kernel 7.2.12-r1 and the 0.3.1 in-place
+runtime update were tested on a Tianma Mi 8 Lite. Source version 0.3.1 integrates
 that runtime into newly built images; the new full image still requires its own
 hardware acceptance. There is no ready-made stable release.
 

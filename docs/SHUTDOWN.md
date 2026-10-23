@@ -20,8 +20,9 @@ an independent emergency power cut for a frozen phone. Existing long-Power reset
 and bootloader key combinations are unchanged.
 
 The screen indicates shutdown is in progress. Physical darkness alone is not
-proof that the phone is fully off. Integration 0.3.0 was physically verified;
-the 0.3.1 fresh-image packaging is verified separately without flashing a phone.
+proof that the phone is fully off. The shutdown behavior was physically verified
+in 0.3.0; the 0.3.1 in-place update passed screen-preview and restart checks with
+the same button policy. Fresh full-image packaging is audited separately.
 
 For diagnosis on a phone running a newly built 0.3.1 image:
 

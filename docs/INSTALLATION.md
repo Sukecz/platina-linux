@@ -2,7 +2,8 @@
 
 **Development port.** The maintainer's existing installation boots and provides
 SSH; kernel 7.2.12-r1 and integration 0.3.0 passed physical Tianma display and
-shutdown tests. New full images built from 0.3.1 have a separate acceptance
+shutdown tests. The existing installation also passed its 0.3.1 runtime update
+and restart checks. New full images built from 0.3.1 have a separate acceptance
 requirement. There is no supported prebuilt installer.
 Build your own images using [BUILDING.md](BUILDING.md).
 
