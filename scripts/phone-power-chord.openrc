@@ -1,0 +1,24 @@
+#!/sbin/openrc-run
+description="Platina Power + Volume Up: hold together, release both to shut down"
+command="/usr/local/sbin/platina-power-chord"
+command_user="root:root"
+command_args="--hold-seconds ${hold_seconds:-3}"
+supervisor="supervise-daemon"
+pidfile="/run/platina-power-chord.pid"
+respawn_delay=5
+respawn_max=5
+respawn_period=1800
+output_log="/var/log/platina-power-chord.log"
+error_log="/var/log/platina-power-chord.log"
+
+depend() {
+    need localmount
+    after udev-trigger
+}
+
+start_pre() {
+    checkpath --file --mode 0640 --owner root:root "$output_log"
+    if yesno "${dry_run:-yes}"; then
+        command_args="$command_args --dry-run"
+    fi
+}

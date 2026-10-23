@@ -30,7 +30,8 @@ grep -q '^https://mirror.nura.eco/postmarketos/v26.06$' /etc/apk/repositories
 for package in device-xiaomi-platina firmware-xiaomi-platina linux-postmarketos-qcom-sdm660; do
     grep -q "^$package=" /etc/apk/world
 done
-for service in sshd dbus networkmanager usb-moded chronyd local avahi-daemon; do
+python3 /usr/local/libexec/platina-image-runtime audit
+for service in sshd dbus networkmanager usb-moded chronyd local avahi-daemon platina-power-chord; do
     test -L "/etc/runlevels/default/$service"
 done
 for key in /etc/ssh/ssh_host_*_key; do

@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import runpy
 import struct
 import subprocess
 
@@ -48,10 +49,12 @@ def main():
     metadata = subprocess.check_output(['blkid', '-p', '-o', 'export',
                                         str(OUT / 'xiaomi-platina.img')], text=True)
     assert f'UUID={uuid}\n' in metadata and 'TYPE=ext4\n' in metadata
-    def root_file(path):
+    def root_blob(path):
         return subprocess.check_output(['debugfs', '-R', 'cat ' + path,
                                         str(OUT / 'xiaomi-platina.img')],
-                                       stderr=subprocess.DEVNULL, text=True)
+                                       stderr=subprocess.DEVNULL)
+    def root_file(path):
+        return root_blob(path).decode()
     assert root_file('/etc/resolv.conf').splitlines() == ['nameserver 1.1.1.1', 'nameserver 1.0.0.1']
     assert root_file('/etc/apk/repositories').splitlines() == [
         'https://mirror.nura.eco/postmarketos/v26.06',
@@ -82,11 +85,25 @@ def main():
     for firmware in ('regulatory.db', 'regulatory.db.p7s'):
         assert any(name.endswith('/firmware/' + firmware) for name in files), firmware
     assert not any(name.endswith(('.nmconnection', 'id_ed25519', 'id_rsa')) for name in files)
+    runtime_info = None
+    build_manifest = json.loads((OUT / 'manifest.json').read_text())
+    if 'integration' in build_manifest:
+        runtime = runpy.run_path(str(ROOT / 'scripts/image-runtime.py'))
+        runtime_manifest = json.loads(root_file('/' + runtime['MANIFEST']))
+        runtime_info = runtime['audit_contents'](runtime_manifest, lambda name: root_blob('/' + name))
+        assert runtime_info == build_manifest['integration'], 'Rootfs runtime differs from build manifest'
+        for name, target in runtime_manifest['symlinks'].items():
+            details = subprocess.check_output(['debugfs', '-R', 'stat /' + name,
+                                               str(OUT / 'xiaomi-platina.img')],
+                                              stderr=subprocess.DEVNULL, text=True)
+            assert 'Type: symlink' in details and f'Fast link dest: "{target}"' in details, name
     report = {'passed': True, 'hardware_tested': False, 'flashed': False,
               'boot_bytes': len(boot), 'boot_limit_bytes': 0x3FFC000,
               'kernel': release, 'rootfs_uuid': uuid, 'cmdline': cmdline,
               'initramfs_modules': len(included), 'missing_module_dependencies': missing,
               'initramfs_sha256': hashlib.sha256(ramdisk).hexdigest()}
+    if runtime_info:
+        report['integration'] = runtime_info
     (ROOT / 'reports' / (OUT.name + '-artifact-audit.json')).write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
 

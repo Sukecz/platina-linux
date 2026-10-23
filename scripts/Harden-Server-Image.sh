@@ -43,14 +43,10 @@ https://cdn.alpinelinux.org/alpine/v3.24/main
 https://cdn.alpinelinux.org/alpine/v3.24/community
 EOF
 chmod 644 /etc/resolv.conf /etc/apk/repositories
-cat > /etc/local.d/platina-headless.start <<'EOF'
-#!/bin/sh
-for path in /sys/class/backlight/*/brightness; do
-    [ -w "$path" ] && printf '0\n' > "$path"
-done
-exit 0
-EOF
-chmod 755 /etc/local.d/platina-headless.start
+# The versioned runtime overlay supplies the complete display hook and screens.
+test -x /etc/local.d/platina-headless.start
+test -x /usr/local/libexec/platina-image-runtime
+python3 /usr/local/libexec/platina-image-runtime audit
 # Hold the exact locally built boot-related packages during normal upgrades.
 set --
 for package in device-xiaomi-platina firmware-xiaomi-platina linux-postmarketos-qcom-sdm660; do
@@ -59,7 +55,7 @@ for package in device-xiaomi-platina firmware-xiaomi-platina linux-postmarketos-
     set -- "$@" "$package=$version"
 done
 apk add --no-network "$@"
-for service in sshd dbus networkmanager usb-moded chronyd local avahi-daemon; do
+for service in sshd dbus networkmanager usb-moded chronyd local avahi-daemon platina-power-chord; do
     rc-update add "$service" default
 done
 printf 'Image configured for SSH keys and passwordless sudo for the dedicated administrator.\n'

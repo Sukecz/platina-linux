@@ -1,8 +1,9 @@
 # Install Linux on Xiaomi Mi 8 Lite (platina)
 
 **Development port.** The maintainer's existing installation boots and provides
-SSH, but the checked-in integrated Tianma display candidate has not yet passed
-its physical boot/power-cycle test. There is no supported prebuilt installer.
+SSH; kernel 7.2.12-r1 and integration 0.3.0 passed physical Tianma display and
+shutdown tests. New full images built from 0.3.1 have a separate acceptance
+requirement. There is no supported prebuilt installer.
 Build your own images using [BUILDING.md](BUILDING.md).
 
 These steps are for a **fresh installation** on **Mi 8 Lite / platina**.
@@ -51,9 +52,9 @@ The examples below assume these files exist:
 
 ```sh
 ROOTFS=artifacts/candidate-local/xiaomi-platina.img
-BOOT=artifacts/candidate-local-scoped/boot.img
+BOOT=artifacts/candidate-local/boot.img
 make verify DIR=artifacts/candidate-local
-make verify DIR=artifacts/candidate-local-scoped
+make audit DIR=artifacts/candidate-local
 ```
 
 The boot command line must refer to the UUID of that root filesystem. Do not mix

@@ -1,8 +1,9 @@
 # Building Platina Linux
 
-This is a source-only development port. The candidate kernel builds, but the new
-integrated Tianma display still needs its first successful physical boot test.
-An image built here is a candidate, not a ready-made stable release.
+This is a source-only development port. Integration 0.3.0 and kernel 7.2.12-r1
+were physically tested on a Tianma Mi 8 Lite. Source version 0.3.1 integrates
+that runtime into newly built images; the new full image still requires its own
+hardware acceptance. There is no ready-made stable release.
 
 ## Build host
 
@@ -14,14 +15,14 @@ On Debian/Ubuntu, typical host tools are:
 
 ```sh
 sudo apt install git python3 make sudo openssh-client e2fsprogs util-linux kmod mtools fastboot
-# Optional: only needed for make splash / custom image conversion.
+# Required for the versioned boot/shutdown screens included by make images.
 sudo apt install python3-pil fonts-dejavu-core
 ```
 
 `make doctor` reports missing core tools without installing them. Kernel compilers
 and package dependencies are installed inside the build chroots by pmbootstrap.
-Python's standard library is enough for the basic offline test suite; image
-conversion uses Pillow on the build host.
+Python's standard library is enough for the basic offline test suite; the image
+runtime integration tests and full image builder also need Pillow and DejaVu Sans.
 
 ## Personal build inputs
 
@@ -77,26 +78,33 @@ The builder stops pmbootstrap mounts before copying/hashing filesystem images.
 Source revisions are pinned, but external Alpine repositories/toolchain packages
 are not fully frozen; bit-for-bit reproducible full builds are not promised.
 
-## Scope initramfs module indexes
+## Integrated runtime and initramfs audit
+
+`make images` builds the versioned boot logo and Power off screen, installs the
+Python display/shutdown helpers and headless hook, and enables the OpenRC
+Power + Volume Up service with the verified three-second policy. The image audit
+checks file hashes, decoded frames, permissions and service links without touching
+the display or invoking shutdown. No experimental PMIC module is included.
+
+The USB current helper and NetworkManager dispatcher are also included. They are
+inert without a separately supplied `/etc/platina/usb-power.json` policy; no host
+identity or increased-current allowance is cloned from the development phone.
+Wi-Fi credentials and monitoring credentials also remain per-installation inputs.
 
 The mkinitfs version used by this port can copy full-rootfs module indexes into
-an initramfs containing only some modules. Before booting or flashing, regenerate
-indexes for the modules that are actually included:
+an initramfs containing only some modules. The builder automatically regenerates
+indexes for the modules actually included in the exported boot image. The final
+boot.img and initramfs are hashed only after this correction. The unmodified
+pmbootstrap export links are intermediate files, not the accepted output bundle.
 
-```sh
-python3 scripts/scope-initramfs-modules.py artifacts/candidate-local/boot.img \
-  --release 7.2.12-sdm660 --output artifacts/candidate-local-scoped
-make verify DIR=artifacts/candidate-local-scoped
-```
-
-Use **candidate-local-scoped/boot.img** with **candidate-local/xiaomi-platina.img**.
-The scoping tool preserves the kernel, DTB and rootfs command line; it does not
-create a second root filesystem and does not flash anything.
+Use boot.img and xiaomi-platina.img from the **same final candidate-local bundle**.
+For manually exported older images, `scripts/scope-initramfs-modules.py` remains
+available. The correction preserves the kernel, DTB and rootfs command line.
 
 Exported files include boot.img, xiaomi-platina.img, initramfs, kernel and DTB.
 Keep the manifest and corresponding APKs for your own rollback records.
 
-## Optional display assets
+## Separate display asset bundles
 
 ```sh
 make splash
@@ -104,5 +112,6 @@ python3 scripts/prepare-display-frame.py your-image.png --output artifacts/custo
 ```
 
 The original logo is preserved; the integration version is added during rendering.
-These commands create local bundles. `make images` does not yet install the
-versioned splash bundle automatically; see [display setup](DISPLAY.md).
+These commands create separate local bundles for review or an explicitly planned
+existing-installation update. A fresh `make images` already includes both release
+screens. See [display setup](DISPLAY.md) and [shutdown behavior](SHUTDOWN.md).

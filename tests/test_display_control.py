@@ -21,6 +21,31 @@ splash = load('display_splash', 'phone-splash.py')
 
 
 class ControlTests(unittest.TestCase):
+    def test_shutdown_request_happens_after_visible_frame_and_before_cleanup(self):
+        events, screen = [], bytearray(b'....')
+        def paint(target, raw, layout):
+            target[:] = raw
+            events.append('paint')
+        def request():
+            self.assertEqual(screen, b'logo')
+            events.append('shutdown-request')
+        helper = {'load_frame': lambda _: ({'version': '0.3.0'}, b'logo'),
+                  'geometry': lambda *_: (1, 1, 4, 0, 4), 'paint': paint}
+        with patch.object(control.runpy, 'run_path', return_value=helper), \
+             patch.object(control, 'Path') as path, \
+             patch.object(control.fcntl, 'ioctl'), \
+             patch.object(control.os, 'open', return_value=12), \
+             patch.object(control.os, 'close'), \
+             patch.object(control.mmap, 'mmap') as memory, \
+             patch.object(control, 'brightness'), \
+             patch.object(control, 'on', side_effect=lambda *_: events.append('visible')), \
+             patch.object(control.time, 'sleep', side_effect=lambda _: events.append('readable-delay')), \
+             patch.object(control, 'off', side_effect=lambda _: events.append('cleanup')):
+            path.return_value.read_text.return_value = 'boot-id'
+            memory.return_value.__enter__.return_value = screen
+            control.show(12, ROOT, 3, 25, after_display=request)
+        self.assertEqual(events, ['paint', 'visible', 'readable-delay', 'shutdown-request', 'cleanup'])
+
     def test_powerdown_clears_backlight_before_drm(self):
         events = MagicMock()
         with patch.object(control, 'brightness', events.brightness), \

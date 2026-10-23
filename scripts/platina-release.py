@@ -76,6 +76,26 @@ def build(output, release=None):
         renderer_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         font_sha256=hashlib.sha256(font_path.read_bytes()).hexdigest())
     (output / 'release.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    shutdown = screen.copy()
+    shutdown_draw = ImageDraw.Draw(shutdown)
+    for text, size, y, color in [('Power off', 76, 1670, '#d7e3eb'),
+                                  ('Shutting down...', 38, 1790, '#91a8b6')]:
+        face = ImageFont.truetype(str(font_path), size)
+        bounds = shutdown_draw.textbbox((0, 0), text, font=face)
+        shutdown_draw.text(((width - bounds[2] + bounds[0]) // 2 - bounds[0], y),
+                           text, font=face, fill=color)
+    poweroff = output / 'poweroff'
+    poweroff.mkdir()
+    shutdown.save(poweroff / 'preview.png')
+    shutdown_raw = shutdown.tobytes('raw', 'BGRX')
+    shutdown_frame = gzip.compress(shutdown_raw, compresslevel=9, mtime=0)
+    (poweroff / 'frame.bgrx.gz').write_bytes(shutdown_frame)
+    (poweroff / 'version').write_text(release['name'] + ' ' + release['version'] + '\n')
+    shutdown_manifest = dict(manifest, purpose='poweroff-screen', display=dict(
+        manifest['display'], seconds=3,
+        raw_sha256=hashlib.sha256(shutdown_raw).hexdigest(),
+        compressed_sha256=hashlib.sha256(shutdown_frame).hexdigest()))
+    (poweroff / 'release.json').write_text(json.dumps(shutdown_manifest, indent=2) + '\n')
     print('Built locally:', output, '(not deployed)')
 
 

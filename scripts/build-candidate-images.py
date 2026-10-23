@@ -7,8 +7,11 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import runpy
 import shutil
 import subprocess
+import tarfile
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 WORK = ROOT / 'work/pmbootstrap-candidate-7.2'
@@ -34,12 +37,14 @@ def provenance(config_path, config):
                     inputs[str(path.relative_to(recipes))] = hashlib.file_digest(stream, 'sha256').hexdigest()
     dirty = subprocess.run(['git', '-C', str(ROOT), 'status', '--porcelain'],
                            capture_output=True, text=True)
+    runtime = runpy.run_path(str(ROOT / 'scripts/image-runtime.py'))
     return {'project_commit': revision(ROOT),
             'project_dirty': bool(dirty.stdout.strip()) if dirty.returncode == 0 else None,
             'pmaports_commit': revision(recipes.parents[1]),
             'pmbootstrap_commit': revision(ROOT / 'tools/pmbootstrap'),
             'config_sha256': hashlib.sha256(config_path.read_bytes()).hexdigest(),
-            'recipe_inputs_sha256': inputs}
+            'recipe_inputs_sha256': inputs,
+            'runtime_inputs_sha256': runtime['source_inputs']()}
 
 
 def record(phase, **details):
@@ -95,6 +100,10 @@ def main():
     packages = list((WORK / 'packages').glob('**/linux-postmarketos-qcom-sdm660-' + apk_version + '.apk'))
     if not packages:
         raise RuntimeError('Kernel APK must finish successfully before building images')
+    record('preparing-image-runtime')
+    runtime = runpy.run_path(str(ROOT / 'scripts/image-runtime.py'))
+    overlay = WORK / ('runtime-' + args.output_name)
+    runtime_info = runtime['prepare'](overlay)
     if args.resume_image:
         assert (WORK / 'chroot_native/home/pmos/rootfs/xiaomi-platina.img').is_file()
     else:
@@ -106,6 +115,16 @@ def main():
         run('install', '--single-partition', '--no-sparse', '--no-recommends',
             '--password', 'locked-before-export',
             '--add', 'python3,iw,iperf3,mmc-utils,avahi-tools')
+    record('installing-image-runtime', **runtime_info)
+    # Only generated, reviewed runtime files enter this newly built image.
+    # No live device, private config or PMIC experiment is part of this overlay.
+    with tempfile.TemporaryFile() as archive:
+        with tarfile.open(fileobj=archive, mode='w') as stream:
+            for path in sorted(overlay.rglob('*')):
+                stream.add(path, arcname=str(path.relative_to(overlay)), recursive=False)
+        archive.seek(0)
+        subprocess.run(PMB + ['chroot', '--image', '--', 'tar', '-xf', '-', '-C', '/',
+                              '--no-same-owner'], cwd=ROOT, stdin=archive, check=True)
     record('hardening-and-auditing-image')
     # Each pmbootstrap chroot entry restores build DNS/repositories. Configure
     # and audit in one entry, then export without entering the image again.
@@ -119,24 +138,35 @@ def main():
     # Stop all mounts before copying/hashing the mutable filesystem image.
     run('shutdown')
     OUTPUT.mkdir()
-    files = []
     for source in sorted(links.rglob('*')):
         if not source.is_file():
             continue
         target = OUTPUT / source.relative_to(links)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
-        with target.open('rb') as stream:
-            digest = hashlib.file_digest(stream, 'sha256').hexdigest()
-        files.append({'file': str(target.relative_to(OUTPUT)),
-                      'bytes': target.stat().st_size, 'sha256': digest})
+    record('scoping-exported-initramfs')
+    scope = runpy.run_path(str(ROOT / 'scripts/scope-initramfs-modules.py'))['scope']
+    boot, ramdisk, module_count = scope((OUTPUT / 'boot.img').read_bytes(), KERNEL_RELEASE)
+    (OUTPUT / 'boot.img').write_bytes(boot)
+    (OUTPUT / 'initramfs').write_bytes(ramdisk)
+    files = []
+    for target in sorted(OUTPUT.rglob('*')):
+        if target.is_file():
+            with target.open('rb') as stream:
+                digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+            files.append({'file': str(target.relative_to(OUTPUT)),
+                          'bytes': target.stat().st_size, 'sha256': digest})
     assert {'boot.img', 'xiaomi-platina.img', 'initramfs', 'vmlinuz'} <= {f['file'] for f in files}
     if provenance(config_path, config) != build_sources:
         raise RuntimeError('Build sources changed during the build; review before publishing artifacts')
     manifest = {'kernel': KERNEL_RELEASE, 'hardware_tested': False,
                 'build_sources': build_sources,
+                'integration': runtime_info,
+                'module_indexes_scoped': True, 'initramfs_modules': module_count,
                 'flashed': False, 'files': files}
     (OUTPUT / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    subprocess.run(['python3', str(ROOT / 'scripts/audit-candidate-artifacts.py'),
+                    '--directory', str(OUTPUT)], cwd=ROOT, check=True)
     record('exported-offline-audit-passed-hardware-test-pending', files=len(files))
 
 

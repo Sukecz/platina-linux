@@ -79,7 +79,7 @@ def device():
             os.close(fb)
 
 
-def show(fb, directory, seconds, percent, boot=False):
+def show(fb, directory, seconds, percent, boot=False, after_display=None):
     helper = runpy.run_path('/usr/local/sbin/platina-splash', run_name='display_helpers')
     manifest, raw = helper['load_frame'](directory)
     boot_id = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
@@ -105,6 +105,8 @@ def show(fb, directory, seconds, percent, boot=False):
             print(json.dumps({'framebuffer_written': manifest['version'], 'seconds': seconds,
                               'backend': 'integrated-tianma'}), flush=True)
             time.sleep(seconds)
+            if after_display is not None:
+                after_display()
             brightness(0)
             screen[:] = b'\0' * layout[4]
         if boot:

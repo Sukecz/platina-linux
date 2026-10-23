@@ -14,10 +14,15 @@ this is not Android, a container inside Android, or a desktop phone OS.
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](LICENSE)
 [![Device: Xiaomi Mi 8 Lite](https://img.shields.io/badge/device-Xiaomi_Mi_8_Lite-ff6900)](docs/HARDWARE.md)
 
-**Verified integration: 0.1.1** · **Kernel: 7.2.12-sdm660** · **Development / early hardware testing**
+**Verified integration: 0.3.0** · **Kernel: 7.2.12-r1 / 7.2.12-sdm660** · **Development / early hardware testing**
+
+**Source/build integration: 0.3.1.** Fresh image builds include both screens,
+display helpers and the shutdown service. This packaging update has not been
+flashed to the tested phone; its installed integration remains 0.3.0.
 
 [Installation](docs/INSTALLATION.md) · [Build from source](docs/BUILDING.md)
-· [Display development](docs/DISPLAY.md) · [Changelog](CHANGELOG.md) · [Licensing](docs/LICENSING.md)
+· [Display development](docs/DISPLAY.md) · [Shutdown](docs/SHUTDOWN.md)
+· [Changelog](CHANGELOG.md) · [Licensing](docs/LICENSING.md)
 
 ## What it does
 
@@ -28,9 +33,8 @@ this is not Android, a container inside Android, or a desktop phone OS.
   USB networking provides a separate local administration path.
 - **Headless by default:** keep the backlight dark while running background services.
 - **Battery and charger operation:** use Wi-Fi while running on the battery or a separate charger.
-- **A useful display foundation:** the existing logo works with a temporary helper;
-  the integrated Tianma driver and commands for brightness, power and custom images
-  are prepared for their next hardware test.
+- **Integrated Tianma display:** boot logo, brightness and ten repeated display
+  off/on cycles have been physically verified. Full LCD rail shutdown remains pending.
 - **Repeatable development:** pinned source revisions, versioned recipes, checksum
   verification, offline tests and separate build/export/audit steps.
 
@@ -59,9 +63,11 @@ not a guarantee for every device or panel variant.
 | Battery operation | 🟢 | Wi-Fi administration with data USB physically disconnected |
 | Separate charger operation | 🟢 | Operation and charging confirmed with a suitable charger/cable |
 | Battery / thermal telemetry | 🟢 | Battery information and CPU, GPU and battery temperature readings |
-| Short boot logo | 🟢 | Logo and subsequent backlight shutdown physically confirmed in 0.1.1 |
-| Integrated Tianma NT36672A panel driver | 🟠 | Kernel 7.2.12-r1 built; boot/module candidate audited offline, not yet boot-tested |
-| Display power, brightness and custom images | 🟠 | Control tools and image conversion tested offline; panel power cycles await hardware test |
+| Physical shutdown buttons and screen | 🟢 | Power + Volume Up held for 3 s, release both; Power off logo and battery shutdown physically verified |
+| Staying off while USB power is connected | 🔴 | Accepted limitation: disconnect USB/charger before shutdown; otherwise the bootloader starts Linux again |
+| Short boot logo | 🟢 | Automatic logo and subsequent shutdown physically confirmed after normal boot in 0.2.0 |
+| Integrated Tianma NT36672A panel driver | 🟢 | Kernel 7.2.12-r1: RAM boot, normal eMMC boot, image and ten off/on cycles verified |
+| Display power, brightness and custom images | 🟠 | Brightness and driver powerdown verified; VSP/VSN remain fixed always-on. Custom-image conversion tested offline |
 | Beszel monitoring | 🟠 | Native monitoring tested separately; optional custom hub/power-chart integration is outside this source base |
 | VPN access from outside the home network | 🟠 | A LAN jump-host route was tested; a real off-site client test is pending |
 | Continuous 48–72-hour uptime | 🟠 | Qualification is pending; shorter successful tests are not a soak test |
@@ -73,9 +79,14 @@ not a guarantee for every device or panel variant.
 | Android apps / Android services | 🔴 | This system replaces the running Android environment |
 | Other Xiaomi Mi 8 models / other phones | 🔴 | This port targets **Mi 8 Lite / platina only** |
 
-The checked-in candidate sources are **kernel 7.2.12-r1 + device 5-r31**. They include
-the new display work; **they are not the same as the physically verified 0.1.1
-installation**. The public firmware recipe is 2-r5, with a newly written packaging
+To switch the phone off and keep it off, **disconnect USB/the charger first**,
+hold **Power + Volume Up for at least 3 seconds**, then release both buttons.
+The Platina logo and Power off screen appear during shutdown. The shutdown
+service is enabled; experimental PMIC trigger changes are not loaded automatically.
+
+The checked-in candidate sources are **kernel 7.2.12-r1 + device 5-r31**. The
+physically verified 0.2.0 installation uses that kernel with device 5-r30 and
+the documented runtime initramfs adjustments. The public firmware recipe is 2-r5, with a newly written packaging
 helper; proprietary firmware payloads are supplied locally by each builder.
 No prebuilt installation images or binary firmware are published here.
 
@@ -112,8 +123,8 @@ means **built**, an offline audit means **audited**, and a physical phone test m
 **hardware verified**. These states are recorded separately.
 
 Platina's integration version lives in `project/release.json`; it is independent
-of the Linux and Alpine version numbers. The integrated display candidate will
-become a new integration version only after installation and hardware validation.
+of the Linux and Alpine version numbers. Integration 0.2.0 records the physically tested Tianma driver; 0.3.0 adds
+the shutdown chord and screen. Display rail and USB charger-boot limits are documented.
 
 ## Credits and license
 

@@ -92,6 +92,21 @@ class FramebufferTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'checksum'):
                 splash.load_frame(root)
 
+    def test_generated_poweroff_frame_is_separate_and_checksum_valid(self):
+        try:
+            import PIL
+        except ImportError:
+            self.skipTest('Host-only asset builder needs Pillow')
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp) / 'release'
+            release.build(directory)
+            boot, raw_boot = splash.load_frame(directory)
+            shutdown, raw_shutdown = splash.load_frame(directory / 'poweroff')
+            self.assertEqual(shutdown['purpose'], 'poweroff-screen')
+            self.assertEqual(shutdown['version'], boot['version'])
+            self.assertEqual(len(raw_shutdown), len(raw_boot))
+            self.assertNotEqual(raw_shutdown, raw_boot)
+
 
 if __name__ == '__main__':
     unittest.main()
