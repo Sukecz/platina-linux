@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+project=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+exec "$project/tools/pmbootstrap/pmbootstrap.py" -c "$project/config/pmbootstrap-managed-candidate.cfg" "$@"

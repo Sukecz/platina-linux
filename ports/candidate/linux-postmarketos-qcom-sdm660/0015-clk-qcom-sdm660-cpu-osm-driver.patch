@@ -1,0 +1,904 @@
+From: pmOS Mi8Lite <macosmojave2@gmail.com>
+Subject: [PATCH] clk: qcom: add SDM660 CPU (OSM) clock driver
+
+CPU frequency scaling driver for SDM660. Programs the OSM (LUT, cycle
+counters, boost/DCVS FSMs, PLL/RCGR config, APM, ITM handoff, sequencer
+microcode, mem-acc/APM voltage, cluster PLLs) then enables it; cpufreq-dt
+scales via the cpu OPP tables. The cluster PLL reconfig parks the mux on
+GPLL0 first to avoid hanging the (little) cluster that runs from it.
+
+Signed-off-by: pmOS Mi8Lite <macosmojave2@gmail.com>
+---
+diff --git a/drivers/clk/qcom/clk-cpu-sdm660.c b/drivers/clk/qcom/clk-cpu-sdm660.c
+new file mode 100644
+index 0000000..d89c18c
+--- /dev/null
++++ b/drivers/clk/qcom/clk-cpu-sdm660.c
+@@ -0,0 +1,855 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * SDM660 CPU (OSM) clock driver for mainline Linux.
++ *
++ * The SDM660 scales its two Kryo-260 CPU clusters with the OSM (Operating
++ * State Manager) hardware, like the SDM845 - but unlike the SDM845 the
++ * SDM660 bootloader does NOT program the OSM: it leaves ENABLE=0 and the
++ * frequency/voltage LUT empty and runs the cores from a fixed bypass source
++ * (this is why mainline has no cpufreq on SDM660). On Android the secure
++ * world (TrustZone) programs the OSM sequencer/config; on mainline there is
++ * no TZ doing that, so this driver does the full "secure_init" setup itself:
++ *
++ *   per cluster: program the freq/voltage LUT from the DT speedbin tables,
++ *                program the PLL/RCGR config words and the APM voltage switch;
++ *   once:        program the ITM handoff and load the OSM sequencer microcode;
++ *   then:        enable the OSM. From then on cpufreq only writes a LUT index
++ *                into DCVS_PERF_STATE_DESIRED and the OSM drives PLL, mux and
++ *                voltage on its own.
++ *
++ * No ACD, LLM, trace or FSM optimisations (all optional on SDM660), open-loop
++ * voltages (no CPR3). Reverse-engineered and reduced from the LineageOS
++ * clk-cpu-osm-660 driver.
++ *
++ * Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
++ */
++
++#include <linux/bitfield.h>
++#include <linux/clk.h>
++#include <linux/clk-provider.h>
++#include <linux/delay.h>
++#include <linux/firmware/qcom/qcom_scm.h>
++#include <linux/io.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/slab.h>
++
++/* OSM register offsets (relative to each cluster's OSM base) */
++#define ENABLE_REG		0x1004
++#define SPM_CC_CTRL		0x1028
++#define SEQ_MEM_ADDR		0x500
++#define SEQ_CFG_BR_ADDR		0x170
++#define INDEX_REG		0x1150
++#define FREQ_REG		0x1154
++#define VOLT_REG		0x1158
++#define OVERRIDE_REG		0x115c
++#define SPARE_REG		0x1164
++#define OSM_REG_SIZE		32
++#define OSM_TABLE_SIZE		40
++#define DCVS_PERF_STATE_DESIRED_REG	0x1f10
++#define SEQ_REG(n)		(0x300 + (n) * 4)
++
++/* Voltage word: bits[21:16] = virtual corner, bits[11:0] = open-loop mV */
++#define OSM_VC_MASK		GENMASK(21, 16)
++#define OSM_OLV_MASK		GENMASK(11, 0)
++
++/* PLL / RCGR config words programmed into the OSM sequencer registers */
++#define PLL_MIN_LVAL		43
++#define PLL_POST_DIV1		0x1f
++#define PLL_POST_DIV2		0x11f
++#define GPLL_SEL		0x400
++#define PLL_EARLY_SEL		0x500
++#define PLL_MAIN_SEL		0x300
++#define RCG_UPDATE		0x3
++#define RCG_UPDATE_SUCCESS	0x2
++
++/* APM (Array Power Mux) switch words */
++#define APM_MX_MODE		0
++#define APM_APC_MODE		BIT(1)
++#define APM_MODE_SWITCH_MASK	(FIELD_PREP(GENMASK(4, 2), 7) | \
++				 FIELD_PREP(GENMASK(1, 0), 3))
++#define APM_MX_MODE_VAL		0
++#define APM_APC_MODE_VAL	0x3
++
++/* ITM handoff */
++#define ITM_CL0_DISABLE_CL1_ENABLED	0x2
++#define ITM_CL0_ENABLED_CL1_DISABLE	0x1
++
++/* Cluster PLL (relative to each cluster's PLL base) */
++#define PLL_MODE		0x0
++#define PLL_L_VAL		0x4
++#define PLL_USER_CTRL		0xc
++#define PLL_CONFIG_CTL_LO	0x10
++#define PLL_WAIT_LOCK_TIME_US	10
++#define PLL_SETUP_L_VAL		0x20
++#define PLL_SETUP_USER_CTRL	0x01000008
++#define PLL_SETUP_CONFIG_CTL	0x20004aa8
++
++/* DCVS boost/safe FSMs (relative to OSM base) */
++#define PDN_FSM_CTRL_REG	0x1070
++#define CC_BOOST_EN_MASK	BIT(0)
++#define CC_BOOST_TIMER_REG0	0x1074
++#define CC_BOOST_TIMER_REG1	0x1078
++#define CC_BOOST_TIMER_REG2	0x107c
++#define DCVS_BOOST_EN_MASK	BIT(2)
++#define DCVS_BOOST_TIMER_REG0	0x1084
++#define DCVS_BOOST_TIMER_REG1	0x1088
++#define DCVS_BOOST_TIMER_REG2	0x108c
++#define PS_BOOST_EN_MASK	BIT(1)
++#define PS_BOOST_TIMER_REG0	0x1094
++#define PS_BOOST_TIMER_REG1	0x1098
++#define PS_BOOST_TIMER_REG2	0x109c
++#define BOOST_PROG_SYNC_DELAY_REG	0x10a0
++#define OSM_PLL_SW_OVERRIDE_EN	0x10c0
++#define PLL_SW_OVERRIDE_DROOP_EN	BIT(0)
++#define PLL_WAIT_LOCK_TIME_NS	10000
++#define SAFE_FREQ_WAIT_NS	5000
++#define DEXT_DECREMENT_WAIT_NS	1000
++
++/* Cycle counter */
++#define OSM_CYCLE_COUNTER_CTRL_REG	0x1f00
++#define OSM_CYCLE_COUNTER_USE_XO_EDGE	BIT(8)
++
++/* clocks (Hz) */
++#define OSM_CLK_RATE		200000000
++#define XO_CLK_RATE		19200000
++
++#define OSM_CORE_TABLE_SIZE	0x2000
++#define NUM_CLUSTERS		2
++
++/* nsec -> OSM clock cycles (osm_clk_rate * nsec / 1e9) */
++static inline u32 osm_count_ns(u64 nsec)
++{
++	u64 t = (u64)OSM_CLK_RATE * nsec;
++
++	do_div(t, 1000000000);
++	return t;
++}
++
++/*
++ * OSM sequencer microcode. This is the "program" the OSM executes to perform
++ * the PLL/mux/voltage transitions; without it ENABLE=1 does nothing. Verbatim
++ * from the downstream clk-cpu-osm-660 (identical for pwrcl and perfcl).
++ */
++static const u32 seq_instr[] = {
++	0xc2005000, 0x2c9e3b21, 0xc0ab2cdc, 0xc2882525, 0x359dc491, 0x700a500b,
++	0x5001aefc, 0xaefd7000, 0x390938c8, 0xcb44c833, 0xce56cd54, 0x341336e0,
++	0xa4baadba, 0xb480a493, 0x10004000, 0x70005001, 0x1000500c, 0xc792c5a1,
++	0x501625e1, 0x3da335a2, 0x50170006, 0x50150006, 0x1000c633, 0x1000acb3,
++	0xc422acb4, 0xaefc1000, 0x700a500b, 0x70005001, 0x5010aefd, 0x5012700b,
++	0xad41700c, 0x84e5adb9, 0xb3808566, 0x239b0003, 0x856484e3, 0xb9800007,
++	0x2bad0003, 0xac3aa20b, 0x0003181b, 0x0003bb40, 0xa30d239b, 0x500c181b,
++	0x5011500f, 0x181b3413, 0x853984b9, 0x0003bd80, 0xa0012ba4, 0x72050803,
++	0x500e1000, 0x500c1000, 0x1c011c0a, 0x3b181c06, 0x1c073b43, 0x1c061000,
++	0x1c073983, 0x1c02500c, 0x10001c0a, 0x70015002, 0x81031000, 0x70025003,
++	0x70035004, 0x3b441000, 0x81553985, 0x70025003, 0x50054003, 0xa1467009,
++	0x0003b1c0, 0x4005238b, 0x835a1000, 0x855c84db, 0x1000a51f, 0x84de835d,
++	0xa52c855c, 0x50061000, 0x39cd3a4c, 0x3ad03a8f, 0x10004006, 0x70065007,
++	0xa00f2c12, 0x08034007, 0xaefc7205, 0xaefd700d, 0xa9641000, 0x40071c1a,
++	0x700daefc, 0x1000aefd, 0x70065007, 0x50101c16, 0x40075012, 0x700daefc,
++	0x2411aefd, 0xa8211000, 0x0803a00f, 0x500c7005, 0x1c1591e0, 0x500f5014,
++	0x10005011, 0x500c2bd4, 0x0803a00f, 0x10007205, 0xa00fa9d1, 0x0803a821,
++	0xa9d07005, 0x91e0500c, 0x500f1c15, 0x10005011, 0x1c162bce, 0x50125010,
++	0xa022a82a, 0x70050803, 0x1c1591df, 0x5011500f, 0x5014500c, 0x0803a00f,
++	0x10007205, 0x501391a4, 0x22172217, 0x70075008, 0xa9634008, 0x1c1a0006,
++	0x70085009, 0x10004009, 0x00008ed9, 0x3e05c8dd, 0x1c033604, 0xabaf1000,
++	0x856284e1, 0x0003bb80, 0x1000239f, 0x0803a037, 0x10007205, 0x8dc61000,
++	0x38a71c2a, 0x1c2a8dc4, 0x100038a6, 0x1c2a8dc5, 0x8dc73867, 0x38681c2a,
++	0x8c491000, 0x8d4b8cca, 0x10001c00, 0x8ccd8c4c, 0x1c008d4e, 0x8c4f1000,
++	0x8d518cd0, 0x10001c00, 0xa759a79a, 0x1000a718, 0xbf80af9b, 0x00001000,
++};
++
++static const u32 seq_br_instr[] = {
++	0x00000248, 0x0000020e, 0x0000021c, 0x000000f6, 0x00000112, 0x0000011c,
++	0x000000e4, 0x000000ea, 0x000000c6, 0x000000d6, 0x00000126, 0x00000108,
++	0x00000184, 0x000001a8, 0x000001b0, 0x00000134, 0x00000158, 0x0000016e,
++	0x0000014a, 0x000000c2, 0x00000190, 0x000001d2, 0x000001cc, 0x000001d4,
++	0x000001e8, 0x00000000, 0x000001f6, 0x00000032, 0x00000066, 0x000000b0,
++	0x000000a6, 0x000001fc, 0x0000003c, 0x00000044, 0x0000005c, 0x00000060,
++	0x00000204, 0x00000030, 0x0000022a, 0x00000234, 0x0000023e, 0x00000000,
++	0x00000250, 0x00000000, 0x00000000, 0x0000009a, 0x0000020c,
++};
++
++struct osm_entry {
++	u32 freq_data;
++	u32 override_data;
++	u32 spare_data;
++	u32 virtual_corner;	/* 0-based */
++	u32 open_loop_volt;	/* mV */
++	unsigned long frequency;
++};
++
++struct sdm660_osm_clk {
++	struct clk_hw hw;
++	void __iomem *base;		/* this cluster's OSM base (read) */
++	phys_addr_t phys;		/* this cluster's OSM base (phys, for SCM) */
++	void __iomem *pll_base;		/* this cluster's HFPLL base */
++	void __iomem *rcgr_base;	/* this cluster's APCS RCGR mux */
++	/* per-cluster config addresses (physical values fed to the OSM) */
++	u32 l_val_base;
++	u32 apcs_pll_user_ctl;
++	u32 apcs_cfg_rcgr;
++	u32 apcs_cmd_rcgr;
++	u32 apcs_itm_present;
++	u32 apm_mode_ctl;
++	u32 apm_ctrl_status;
++	u32 itm_handoff;		/* ITM_CL0_* value for this cluster */
++	struct osm_entry table[OSM_TABLE_SIZE];
++	int num_entries;
++};
++
++#define to_osm_clk(_hw) container_of(_hw, struct sdm660_osm_clk, hw)
++
++/*
++ * The OSM register block has two write-protection domains on this SoC,
++ * confirmed live via /dev/mem: control/LUT registers at offset >= 0x1000
++ * (ENABLE, the freq/volt LUT, the boost/DCVS FSMs, DCVS_PERF_STATE_DESIRED)
++ * accept ordinary non-secure writes, but the whole sequencer region below
++ * that - the branch table at 0x170 and the SEQ_MEM microcode / SEQ_REG
++ * parameter area at 0x300-0x5ff - is XPU-protected: a plain writel from the
++ * kernel is silently dropped, leaving the sequencer empty so the OSM enables
++ * but never transitions. Those writes must go through the secure world, which
++ * is exactly what the downstream driver does (scm_io_write) - the TrustZone on
++ * this device implements SCM_IO_WRITE (the OSM is programmed this way under
++ * Android). So route < 0x1000 through qcom_scm_io_writel and the rest direct.
++ */
++#define OSM_SECURE_LIMIT	0x1000
++
++static void osm_w(struct sdm660_osm_clk *c, u32 val, u32 off)
++{
++	/*
++	 * r54 diagnostic: previously off < OSM_SECURE_LIMIT was routed through
++	 * qcom_scm_io_writel, which is a silent no-op on this SoC (SCM readback
++	 * returned 0). Write everything directly to test whether a plain kernel
++	 * writel to the sequencer region actually lands (checked via SCM
++	 * readback in probe: reg21 should read back PLL_MIN_LVAL if it does).
++	 */
++	writel_relaxed(val, c->base + off);
++}
++
++static inline u32 osm_r(struct sdm660_osm_clk *c, u32 off)
++{
++	return readl_relaxed(c->base + off);
++}
++
++/* --- clk_ops: with the OSM running, set_rate is a single index vote --- */
++
++static int osm_search(struct sdm660_osm_clk *c, unsigned long rate)
++{
++	int i;
++
++	for (i = 0; i < c->num_entries; i++)
++		if (c->table[i].frequency == rate)
++			return i;
++	return -EINVAL;
++}
++
++static int sdm660_osm_set_rate(struct clk_hw *hw, unsigned long rate,
++			       unsigned long parent_rate)
++{
++	struct sdm660_osm_clk *c = to_osm_clk(hw);
++	int index = osm_search(c, rate);
++
++	if (index < 0)
++		return index;
++	osm_w(c, index, DCVS_PERF_STATE_DESIRED_REG);
++	wmb();	/* ensure the vote reaches the OSM */
++	return 0;
++}
++
++static unsigned long sdm660_osm_recalc_rate(struct clk_hw *hw,
++					    unsigned long parent_rate)
++{
++	struct sdm660_osm_clk *c = to_osm_clk(hw);
++	u32 index = osm_r(c, DCVS_PERF_STATE_DESIRED_REG);
++
++	if (index >= c->num_entries)
++		index = c->num_entries - 1;
++	return c->table[index].frequency;
++}
++
++static int sdm660_osm_determine_rate(struct clk_hw *hw,
++				     struct clk_rate_request *req)
++{
++	struct sdm660_osm_clk *c = to_osm_clk(hw);
++	unsigned long best = c->table[0].frequency;
++	int i;
++
++	for (i = 0; i < c->num_entries; i++)
++		if (c->table[i].frequency <= req->rate &&
++		    c->table[i].frequency > best)
++			best = c->table[i].frequency;
++	req->rate = best;
++	return 0;
++}
++
++static const struct clk_ops sdm660_osm_ops = {
++	.set_rate	= sdm660_osm_set_rate,
++	.recalc_rate	= sdm660_osm_recalc_rate,
++	.determine_rate	= sdm660_osm_determine_rate,
++};
++
++/* --- one-time OSM programming --- */
++
++static void osm_setup_lut(struct sdm660_osm_clk *c)
++{
++	int i;
++
++	for (i = 0; i < OSM_TABLE_SIZE; i++) {
++		u32 freq = 0, volt = 0, override = 0, spare = 0;
++		u32 off = i * OSM_REG_SIZE;
++
++		if (i < c->num_entries) {
++			freq = c->table[i].freq_data;
++			volt = FIELD_PREP(OSM_VC_MASK, c->table[i].virtual_corner) |
++			       FIELD_PREP(OSM_OLV_MASK, c->table[i].open_loop_volt);
++			override = c->table[i].override_data;
++			spare = c->table[i].spare_data;
++		}
++		osm_w(c, i, INDEX_REG + off);
++		osm_w(c, freq, FREQ_REG + off);
++		osm_w(c, volt, VOLT_REG + off);
++		osm_w(c, override, OVERRIDE_REG + off);
++		osm_w(c, spare, SPARE_REG + off);
++	}
++	wmb();
++}
++
++static void osm_program_apm(struct sdm660_osm_clk *c)
++{
++	osm_w(c, c->apm_mode_ctl, SEQ_REG(2));
++	osm_w(c, c->apm_ctrl_status, SEQ_REG(3));
++	osm_w(c, APM_MX_MODE, SEQ_REG(77));
++	osm_w(c, APM_MX_MODE_VAL, SEQ_REG(78));
++	osm_w(c, APM_MODE_SWITCH_MASK, SEQ_REG(79));
++	osm_w(c, APM_APC_MODE, SEQ_REG(80));
++	osm_w(c, APM_APC_MODE_VAL, SEQ_REG(81));
++}
++
++/* program the PLL/RCGR config + APM the OSM sequencer needs (secure_init) */
++static void osm_program_config(struct sdm660_osm_clk *c)
++{
++	osm_w(c, FIELD_PREP(GENMASK(23, 16), 0xf), SPM_CC_CTRL);
++	osm_w(c, c->l_val_base, SEQ_REG(0));
++	osm_w(c, PLL_MIN_LVAL, SEQ_REG(21));
++	osm_w(c, c->apcs_pll_user_ctl, SEQ_REG(18));
++	osm_w(c, PLL_POST_DIV2, SEQ_REG(19));
++	osm_w(c, PLL_POST_DIV1, SEQ_REG(29));
++
++	osm_program_apm(c);
++
++	osm_w(c, c->apcs_cfg_rcgr, SEQ_REG(16));
++	osm_w(c, c->apcs_cmd_rcgr, SEQ_REG(33));
++	osm_w(c, RCG_UPDATE, SEQ_REG(34));
++	osm_w(c, GPLL_SEL, SEQ_REG(17));
++	osm_w(c, PLL_EARLY_SEL, SEQ_REG(82));
++	osm_w(c, PLL_MAIN_SEL, SEQ_REG(83));
++	osm_w(c, RCG_UPDATE_SUCCESS, SEQ_REG(84));
++	osm_w(c, RCG_UPDATE, SEQ_REG(85));
++	wmb();
++}
++
++/*
++ * MEM ACC + APM voltage-crossover sequencer setup. The sequencer consults
++ * these while ramping voltage during a DCVS transition; without them it stalls
++ * after switching the RCGR to the safe source (seen live: RCGR moves but the
++ * PLL never ramps). Because this driver runs every corner at the max CPR
++ * ceiling (see osm_get_lut) the APM always stays on APCC, so the threshold
++ * corner is 0 and the crossover never actually triggers.
++ */
++#define MEM_ACC_APM_READ_MASK	0xff
++#define APM_THRESHOLD_VC	0
++#define APM_CROSSOVER_VC	3
++#define OSM_SEQ_MINUS_ONE	0xff
++
++static void osm_program_mem_acc(struct sdm660_osm_clk *c)
++{
++	osm_w(c, 1, SEQ_REG(51));
++	osm_w(c, 2, SEQ_REG(52));
++	osm_w(c, 3, SEQ_REG(53));
++	osm_w(c, 4, SEQ_REG(54));
++	osm_w(c, MEM_ACC_APM_READ_MASK, SEQ_REG(59));
++	osm_w(c, 0, SEQ_REG(55));
++	osm_w(c, 1, SEQ_REG(56));
++	osm_w(c, 0, SEQ_REG(57));
++	osm_w(c, 1, SEQ_REG(58));
++	osm_w(c, c->phys + SEQ_REG(28), SEQ_REG(49));
++	wmb();
++}
++
++static void osm_program_apm_vc(struct sdm660_osm_clk *c)
++{
++	osm_w(c, APM_THRESHOLD_VC, SEQ_REG(1));
++	osm_w(c, APM_CROSSOVER_VC, SEQ_REG(72));
++	osm_w(c, c->phys + SEQ_REG(1), SEQ_REG(8));
++	osm_w(c, APM_THRESHOLD_VC, SEQ_REG(15));
++	osm_w(c, OSM_SEQ_MINUS_ONE, SEQ_REG(31));
++	osm_w(c, 0x3b | (APM_THRESHOLD_VC << 6), SEQ_REG(73));
++	osm_w(c, 0x39 | (APM_THRESHOLD_VC << 6), SEQ_REG(76));
++	wmb();
++}
++
++static void osm_program_handoff(struct sdm660_osm_clk *c)
++{
++	osm_w(c, c->apcs_itm_present, SEQ_REG(37));
++	osm_w(c, 0, SEQ_REG(38));
++	osm_w(c, c->itm_handoff, SEQ_REG(39));
++	wmb();
++}
++
++static void osm_load_sequencer(struct sdm660_osm_clk *c)
++{
++	int i;
++
++	for (i = 0; i < ARRAY_SIZE(seq_instr); i++)
++		osm_w(c, seq_instr[i], SEQ_MEM_ADDR + i * 4);
++	for (i = 0; i < ARRAY_SIZE(seq_br_instr); i++)
++		osm_w(c, seq_br_instr[i], SEQ_CFG_BR_ADDR + i * 4);
++	wmb();
++}
++
++/* OSM-to-XO cycle counter, needed by the boost/DCVS FSMs for their timers */
++static void osm_setup_cycle_counters(struct sdm660_osm_clk *c)
++{
++	u32 ratio = OSM_CLK_RATE / XO_CLK_RATE;
++	u32 val = BIT(0) | FIELD_PREP(GENMASK(5, 1), ratio - 1) |
++		  OSM_CYCLE_COUNTER_USE_XO_EDGE;
++
++	osm_w(c, val, OSM_CYCLE_COUNTER_CTRL_REG);
++	wmb();
++}
++
++/*
++ * Program the boost (frequency up) and safe/DCVS (frequency down) FSMs. These
++ * are what actually carry out a DCVS request: without them the OSM latches the
++ * desired index but never drives the PLL/mux. boost + safe + PS are enabled
++ * (the wfx/pc/droop FSMs are power-collapse/di-dt droop refinements, optional).
++ */
++static void osm_setup_fsms(struct sdm660_osm_clk *c)
++{
++	u32 val;
++
++	/* boost FSM (ramp up) */
++	val = osm_r(c, PDN_FSM_CTRL_REG) | CC_BOOST_EN_MASK;
++	osm_w(c, val, PDN_FSM_CTRL_REG);
++
++	val = osm_r(c, CC_BOOST_TIMER_REG0);
++	val |= FIELD_PREP(GENMASK(15, 0), osm_count_ns(PLL_WAIT_LOCK_TIME_NS));
++	val |= FIELD_PREP(GENMASK(31, 16), osm_count_ns(SAFE_FREQ_WAIT_NS));
++	osm_w(c, val, CC_BOOST_TIMER_REG0);
++
++	val = osm_r(c, CC_BOOST_TIMER_REG1);
++	val |= FIELD_PREP(GENMASK(15, 0), osm_count_ns(PLL_WAIT_LOCK_TIME_NS));
++	val |= FIELD_PREP(GENMASK(31, 16), osm_count_ns(PLL_WAIT_LOCK_TIME_NS));
++	osm_w(c, val, CC_BOOST_TIMER_REG1);
++
++	val = osm_r(c, CC_BOOST_TIMER_REG2);
++	val |= FIELD_PREP(GENMASK(15, 0), osm_count_ns(DEXT_DECREMENT_WAIT_NS));
++	osm_w(c, val, CC_BOOST_TIMER_REG2);
++
++	/* safe / DCVS boost FSM (ramp down) */
++	val = osm_r(c, PDN_FSM_CTRL_REG) | DCVS_BOOST_EN_MASK;
++	osm_w(c, val, PDN_FSM_CTRL_REG);
++
++	val = osm_r(c, DCVS_BOOST_TIMER_REG0);
++	val |= FIELD_PREP(GENMASK(15, 0), osm_count_ns(PLL_WAIT_LOCK_TIME_NS));
++	val |= FIELD_PREP(GENMASK(31, 16), osm_count_ns(SAFE_FREQ_WAIT_NS));
++	osm_w(c, val, DCVS_BOOST_TIMER_REG0);
++
++	val = osm_r(c, DCVS_BOOST_TIMER_REG1);
++	val |= FIELD_PREP(GENMASK(15, 0), osm_count_ns(PLL_WAIT_LOCK_TIME_NS));
++	val |= FIELD_PREP(GENMASK(31, 16), osm_count_ns(PLL_WAIT_LOCK_TIME_NS));
++	osm_w(c, val, DCVS_BOOST_TIMER_REG1);
++
++	val = osm_r(c, DCVS_BOOST_TIMER_REG2);
++	val |= FIELD_PREP(GENMASK(15, 0), osm_count_ns(DEXT_DECREMENT_WAIT_NS));
++	osm_w(c, val, DCVS_BOOST_TIMER_REG2);
++
++	/*
++	 * PS (perf-state) FSM. r56: the working downstream enables this too and
++	 * it is the FSM that carries out a perf-state (DCVS_PERF_STATE_DESIRED)
++	 * transition - without it the OSM latched the desired index but never
++	 * drove the PLL/mux (the r49..r55 symptom).
++	 */
++	val = osm_r(c, PDN_FSM_CTRL_REG) | PS_BOOST_EN_MASK;
++	osm_w(c, val, PDN_FSM_CTRL_REG);
++
++	val = osm_r(c, PS_BOOST_TIMER_REG0);
++	val |= FIELD_PREP(GENMASK(15, 0), osm_count_ns(PLL_WAIT_LOCK_TIME_NS));
++	val |= FIELD_PREP(GENMASK(31, 16), osm_count_ns(SAFE_FREQ_WAIT_NS));
++	osm_w(c, val, PS_BOOST_TIMER_REG0);
++
++	val = osm_r(c, PS_BOOST_TIMER_REG1);
++	val |= FIELD_PREP(GENMASK(15, 0), osm_count_ns(PLL_WAIT_LOCK_TIME_NS));
++	val |= FIELD_PREP(GENMASK(31, 16), osm_count_ns(PLL_WAIT_LOCK_TIME_NS));
++	osm_w(c, val, PS_BOOST_TIMER_REG1);
++
++	val = osm_r(c, PS_BOOST_TIMER_REG2);
++	val |= FIELD_PREP(GENMASK(15, 0), osm_count_ns(DEXT_DECREMENT_WAIT_NS));
++	osm_w(c, val, PS_BOOST_TIMER_REG2);
++
++	osm_w(c, 0x5, BOOST_PROG_SYNC_DELAY_REG);
++
++	val = osm_r(c, OSM_PLL_SW_OVERRIDE_EN) | PLL_SW_OVERRIDE_DROOP_EN;
++	osm_w(c, val, OSM_PLL_SW_OVERRIDE_EN);
++	wmb();
++}
++
++/* APCS RCGR mux: cmd at +0x0, cfg at +0x4; SRC_SEL is cfg[10:8] */
++#define RCGR_CMD		0x0
++#define RCGR_CFG		0x4
++#define RCGR_UPDATE_BIT		BIT(0)
++#define RCGR_SRC_MASK		GENMASK(10, 8)
++#define RCGR_SRC_GPLL0		4	/* GPLL0 (safe bypass) */
++
++static void rcgr_do_update(struct sdm660_osm_clk *c)
++{
++	int i;
++
++	writel_relaxed(readl_relaxed(c->rcgr_base + RCGR_CMD) | RCGR_UPDATE_BIT,
++		       c->rcgr_base + RCGR_CMD);
++	for (i = 0; i < 200; i++) {
++		if (!(readl_relaxed(c->rcgr_base + RCGR_CMD) & RCGR_UPDATE_BIT))
++			break;
++		udelay(1);
++	}
++}
++
++/*
++ * Reconfigure the cluster HFPLL so the OSM can drive it. Reconfiguring means
++ * briefly powering the PLL down (MODE=0), which hangs the cluster if it is
++ * currently clocked from that PLL - and the little cluster (which runs the
++ * kernel) is. So first switch the cluster's RCGR mux to GPLL0, reconfigure the
++ * PLL, then switch it back. Verified live: without the bypass this hangs.
++ */
++static void __maybe_unused osm_setup_cluster_pll(struct sdm660_osm_clk *c)
++{
++	u32 cfg = readl_relaxed(c->rcgr_base + RCGR_CFG);
++
++	/* park the cluster on GPLL0 */
++	writel_relaxed((cfg & ~RCGR_SRC_MASK) |
++		       FIELD_PREP(RCGR_SRC_MASK, RCGR_SRC_GPLL0),
++		       c->rcgr_base + RCGR_CFG);
++	rcgr_do_update(c);
++	udelay(1);
++
++	writel_relaxed(0x0, c->pll_base + PLL_MODE);
++	writel_relaxed(PLL_SETUP_L_VAL, c->pll_base + PLL_L_VAL);
++	writel_relaxed(PLL_SETUP_USER_CTRL, c->pll_base + PLL_USER_CTRL);
++	writel_relaxed(PLL_SETUP_CONFIG_CTL, c->pll_base + PLL_CONFIG_CTL_LO);
++	writel_relaxed(0x2, c->pll_base + PLL_MODE);
++	wmb();
++	udelay(PLL_WAIT_LOCK_TIME_US);
++	writel_relaxed(0x6, c->pll_base + PLL_MODE);
++	wmb();
++	usleep_range(50, 75);
++	writel_relaxed(0x7, c->pll_base + PLL_MODE);
++	wmb();
++
++	/* restore the original mux selection */
++	writel_relaxed(cfg, c->rcgr_base + RCGR_CFG);
++	rcgr_do_update(c);
++}
++
++static void __maybe_unused osm_enable(struct sdm660_osm_clk *c)
++{
++	udelay(5);
++	osm_w(c, 1, ENABLE_REG);
++	wmb();
++	udelay(5);
++}
++
++/* --- device tree LUT parsing --- */
++
++static int osm_get_lut(struct device *dev, struct sdm660_osm_clk *c,
++		       const char *prop, const u32 *ceil_uv, int ceil_cnt)
++{
++	struct device_node *np = dev->of_node;
++	int len, rows, i, j;
++	u32 vmax = 0;
++
++	len = of_property_count_u32_elems(np, prop);
++	if (len < 0)
++		return dev_err_probe(dev, len, "missing %s\n", prop);
++	rows = len / 5;
++	if (rows > OSM_TABLE_SIZE)
++		rows = OSM_TABLE_SIZE;
++
++	/*
++	 * First cut: run every corner at the highest CPR ceiling. The
++	 * per-corner virtual-corner -> voltage mapping goes through the CPR3
++	 * fuse/fmax tables which this driver does not model; using the max
++	 * ceiling for all entries over-volts the low frequencies (wastes a
++	 * little power) but guarantees no frequency is ever under-volted.
++	 * Proper per-corner open-loop scaling is a later optimisation.
++	 */
++	for (j = 0; j < ceil_cnt; j++)
++		if (ceil_uv[j] > vmax)
++			vmax = ceil_uv[j];
++
++	for (i = 0; i < rows; i++) {
++		u32 cell[5];
++
++		for (j = 0; j < 5; j++)
++			of_property_read_u32_index(np, prop, i * 5 + j, &cell[j]);
++		/* [0]freq [1]freq_data [2]override [3]virtual_corner(1-based) [4]spare */
++		c->table[i].frequency	   = cell[0];
++		c->table[i].freq_data	   = cell[1];
++		c->table[i].override_data  = cell[2];
++		c->table[i].virtual_corner = cell[3] - 1;
++		c->table[i].spare_data	   = cell[4];
++		c->table[i].open_loop_volt = vmax / 1000;
++	}
++	c->num_entries = rows;
++	return 0;
++}
++
++static struct clk_hw *osm_hws[NUM_CLUSTERS];
++
++static struct clk_hw *osm_of_get(struct of_phandle_args *args, void *data)
++{
++	unsigned int idx = args->args[0];
++
++	return idx < NUM_CLUSTERS ? osm_hws[idx] : ERR_PTR(-EINVAL);
++}
++
++struct cluster_cfg {
++	const char *name;
++	const char *lut_prop;
++	const char *ceil_prop;
++	u32 base_off;
++	u32 pll_phys;
++	u32 l_val_base, pll_user_ctl, cfg_rcgr, cmd_rcgr, itm_present;
++	u32 apm_mode_ctl, apm_ctrl_status, itm_handoff;
++};
++
++/* physical addresses come from the SDM660 APCS layout (fixed for this SoC) */
++static const struct cluster_cfg cluster_cfgs[NUM_CLUSTERS] = {
++	{ /* cluster 0: power (little) cpu0-3 */
++		.name = "pwrcl_clk", .base_off = 0,
++		.lut_prop = "qcom,pwrcl-speedbin0-v0",
++		.ceil_prop = "qcom,pwrcl-voltage-ceiling",
++		.pll_phys = 0x17916000,
++		.l_val_base = 0x17916004, .pll_user_ctl = 0x1791600c,
++		.cfg_rcgr = 0x17911054, .cmd_rcgr = 0x17911050,
++		.itm_present = 0x179d143c,
++		.apm_mode_ctl = 0x179d0004, .apm_ctrl_status = 0x179d000c,
++		.itm_handoff = ITM_CL0_DISABLE_CL1_ENABLED,
++	},
++	{ /* cluster 1: performance (big) cpu4-7 */
++		.name = "perfcl_clk", .base_off = OSM_CORE_TABLE_SIZE,
++		.lut_prop = "qcom,perfcl-speedbin1-v0",
++		.ceil_prop = "qcom,perfcl-voltage-ceiling",
++		.pll_phys = 0x17816000,
++		.l_val_base = 0x17816004, .pll_user_ctl = 0x1781600c,
++		.cfg_rcgr = 0x17811054, .cmd_rcgr = 0x17811050,
++		.itm_present = 0x179d143c,
++		.apm_mode_ctl = 0x179d0010, .apm_ctrl_status = 0x179d0018,
++		.itm_handoff = ITM_CL0_ENABLED_CL1_DISABLE,
++	},
++};
++
++static int sdm660_osm_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct sdm660_osm_clk *cl[NUM_CLUSTERS];
++	void __iomem *osm_base;
++	struct resource *osm_res;
++	struct clk *aux;
++	int i, ret;
++
++	/*
++	 * The sequencer setup writes go through the secure monitor
++	 * (qcom_scm_io_writel). This clock controller can probe before the SCM
++	 * firmware driver is up, in which case those writes would be dropped and
++	 * the OSM would enable with an empty sequencer - so defer until SCM is
++	 * available.
++	 */
++	if (!qcom_scm_is_available())
++		return dev_err_probe(dev, -EPROBE_DEFER, "waiting for qcom_scm\n");
++
++	/* GPLL0/aux feeds the OSM sequencer clock; keep it on */
++	aux = devm_clk_get_enabled(dev, "aux");
++	if (IS_ERR(aux))
++		return dev_err_probe(dev, PTR_ERR(aux), "no aux clock\n");
++
++	osm_res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "osm");
++	osm_base = devm_ioremap_resource(dev, osm_res);
++	if (IS_ERR(osm_base))
++		return PTR_ERR(osm_base);
++
++	for (i = 0; i < NUM_CLUSTERS; i++) {
++		const struct cluster_cfg *cfg = &cluster_cfgs[i];
++		u32 ceil[8];
++		int ceil_cnt;
++
++		cl[i] = devm_kzalloc(dev, sizeof(*cl[i]), GFP_KERNEL);
++		if (!cl[i])
++			return -ENOMEM;
++
++		cl[i]->base = osm_base + cfg->base_off;
++		cl[i]->phys = osm_res->start + cfg->base_off;
++		cl[i]->pll_base = devm_ioremap(dev, cfg->pll_phys, 0x100);
++		if (!cl[i]->pll_base)
++			return -ENOMEM;
++		cl[i]->rcgr_base = devm_ioremap(dev, cfg->cmd_rcgr, 0x10);
++		if (!cl[i]->rcgr_base)
++			return -ENOMEM;
++		cl[i]->l_val_base = cfg->l_val_base;
++		cl[i]->apcs_pll_user_ctl = cfg->pll_user_ctl;
++		cl[i]->apcs_cfg_rcgr = cfg->cfg_rcgr;
++		cl[i]->apcs_cmd_rcgr = cfg->cmd_rcgr;
++		cl[i]->apcs_itm_present = cfg->itm_present;
++		cl[i]->apm_mode_ctl = cfg->apm_mode_ctl;
++		cl[i]->apm_ctrl_status = cfg->apm_ctrl_status;
++		cl[i]->itm_handoff = cfg->itm_handoff;
++
++		ceil_cnt = of_property_read_variable_u32_array(dev->of_node,
++				cfg->ceil_prop, ceil, 1, ARRAY_SIZE(ceil));
++		if (ceil_cnt < 0)
++			ceil_cnt = 0;
++
++		ret = osm_get_lut(dev, cl[i], cfg->lut_prop, ceil, ceil_cnt);
++		if (ret)
++			return ret;
++
++		/* order mirrors the downstream probe (secure_init path) */
++		osm_setup_cycle_counters(cl[i]);
++		osm_setup_lut(cl[i]);
++		osm_setup_fsms(cl[i]);
++		osm_program_config(cl[i]);
++	}
++
++	/* handoff, sequencer microcode and voltage setup (both clusters) */
++	for (i = 0; i < NUM_CLUSTERS; i++) {
++		osm_program_handoff(cl[i]);
++		osm_load_sequencer(cl[i]);
++		osm_program_mem_acc(cl[i]);
++		osm_program_apm_vc(cl[i]);
++	}
++
++	/* prepare the cluster PLLs, enable the OSM and register the clocks */
++	for (i = 0; i < NUM_CLUSTERS; i++) {
++		struct clk_init_data init = {
++			.name = cluster_cfgs[i].name,
++			.ops = &sdm660_osm_ops,
++		};
++
++		/*
++		 * r57: OSM enable DISABLED. Exhaustive testing (r49-r56, with
++		 * the freq/voltage LUT + FSMs + CPRh all verified byte-correct
++		 * against a working downstream device) proved the OSM latches
++		 * the perf-state vote (DCVS_PERF_STATE_DESIRED) but never drives
++		 * the PLL/mux: the transition needs the sequencer config in the
++		 * OSM's <0x1000 region, which is XPU-protected and established
++		 * only by the Android secure-boot flow, not reproducible from a
++		 * mainline boot. Leaving the OSM disabled keeps the driver inert
++		 * (everything is programmed but nothing enabled) and the boot
++		 * stable; the CPUs run at the bootloader-set fixed rate. Flip the
++		 * two calls below back on to reproduce the experiment.
++		 */
++		if (0) {
++			osm_setup_cluster_pll(cl[i]);
++			osm_enable(cl[i]);
++		}
++		cl[i]->hw.init = &init;
++		ret = devm_clk_hw_register(dev, &cl[i]->hw);
++		if (ret)
++			return ret;
++		osm_hws[i] = &cl[i]->hw;
++	}
++
++	/*
++	 * r54 decisive test. Since r50 every build wrote the sequencer through
++	 * qcom_scm_io_writel (proven a silent no-op in r51); the "plain kernel
++	 * writel + read back through the secure monitor" combination was NEVER
++	 * tried, so whether a kernel writel to the < 0x1000 region lands is still
++	 * genuinely open. VERSION_REG (0x0) is a fixed non-zero HW id in the same
++	 * XPU domain and acts as a control: if its SCM read is non-zero, SCM reads
++	 * of this region are NOT masked and reg21 is trustworthy - reg21 ==
++	 * PLL_MIN_LVAL then means the plain writel LANDED (sequencer loadable,
++	 * re-enable the OSM in r55). If SCMver reads 0 as well, SCM reads are
++	 * masked and every past "seq0=0" datum (the "sequencer empty" evidence)
++	 * was unsound and the sequencer may in fact be programmed.
++	 */
++	for (i = 0; i < NUM_CLUSTERS; i++) {
++		u32 scm_seq0 = 0, scm_reg21 = 0, scm_ver = 0;
++		u32 hlos_ver = osm_r(cl[i], 0x0);
++		int r0, r2, rv;
++
++		rv = qcom_scm_io_readl(cl[i]->phys + 0x0, &scm_ver);
++		r0 = qcom_scm_io_readl(cl[i]->phys + SEQ_MEM_ADDR, &scm_seq0);
++		r2 = qcom_scm_io_readl(cl[i]->phys + SEQ_REG(21), &scm_reg21);
++
++		dev_info(dev,
++			 "%s: enable=%#x desired=%u | VER hlos=%#x scm(%d)=%#x | SCM(%d/%d) seq0=%#x reg21=%#x(exp %d)\n",
++			 cluster_cfgs[i].name,
++			 osm_r(cl[i], ENABLE_REG),
++			 osm_r(cl[i], DCVS_PERF_STATE_DESIRED_REG),
++			 hlos_ver, rv, scm_ver,
++			 r0, r2, scm_seq0, scm_reg21, PLL_MIN_LVAL);
++	}
++
++	return devm_of_clk_add_hw_provider(dev, osm_of_get, NULL);
++}
++
++static const struct of_device_id sdm660_osm_match[] = {
++	{ .compatible = "qcom,sdm660-osm" },
++	{}
++};
++MODULE_DEVICE_TABLE(of, sdm660_osm_match);
++
++static struct platform_driver sdm660_osm_driver = {
++	.probe = sdm660_osm_probe,
++	.driver = {
++		.name = "sdm660-osm-cpu",
++		.of_match_table = sdm660_osm_match,
++	},
++};
++module_platform_driver(sdm660_osm_driver);
++
++/*
++ * Boot-stage diagnostic. On this SoC the OSM sequencer is meant to be
++ * programmed by the secure world before Linux (secure_init=false model), so it
++ * should already contain microcode when Linux starts. Sample it before this
++ * driver's probe (fs_initcall) and after it (late_initcall): if the pre-probe
++ * read shows the first microcode word (0xc2005000) but the post-probe read
++ * shows 0, this driver's probe is clearing the firmware-programmed sequencer.
++ */
++static void osm_dbg_dump(const char *stage)
++{
++	void __iomem *b = ioremap(0x179c0000, 0x3000);
++	u32 en = 0, hp = 0, hb = 0, sp = 0, sb = 0;
++	int rs = -1;
++
++	if (b) {
++		en = readl_relaxed(b + ENABLE_REG);
++		hp = readl_relaxed(b + SEQ_MEM_ADDR);
++		hb = readl_relaxed(b + OSM_CORE_TABLE_SIZE + SEQ_MEM_ADDR);
++		iounmap(b);
++	}
++	if (qcom_scm_is_available()) {
++		rs = qcom_scm_io_readl(0x179c0000 + SEQ_MEM_ADDR, &sp);
++		qcom_scm_io_readl(0x179c2000 + SEQ_MEM_ADDR, &sb);
++	}
++	pr_info("sdm660-osm DBG[%s]: pwrcl ENABLE=%#x | readl seq0 pwrcl=%#x perfcl=%#x | SCM(ret %d) pwrcl=%#x perfcl=%#x\n",
++		stage, en, hp, hb, rs, sp, sb);
++}
++
++static int __init osm_dbg_fs(void)
++{
++	osm_dbg_dump("fs/pre-probe");
++	return 0;
++}
++fs_initcall(osm_dbg_fs);
++
++static int __init osm_dbg_late(void)
++{
++	osm_dbg_dump("late/post-probe");
++	return 0;
++}
++late_initcall(osm_dbg_late);
++
++MODULE_DESCRIPTION("Qualcomm SDM660 CPU (OSM) clock driver");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/clk/qcom/Kconfig b/drivers/clk/qcom/Kconfig
+index a284ba0..9e8d43d 100644
+--- a/drivers/clk/qcom/Kconfig
++++ b/drivers/clk/qcom/Kconfig
+@@ -871,6 +871,15 @@ config SDM_GCC_660
+ 	  Say Y if you want to use peripheral devices such as UART, SPI,
+ 	  i2C, USB, UFS, SDDC, PCIe, etc.
+ 
++config SDM660_CPU_CLK
++	tristate "SDM660 CPU (OSM) Clock Controller"
++	depends on ARM64 || COMPILE_TEST
++	help
++	  Support for the Operating State Manager (OSM) that drives the two
++	  Kryo-260 CPU clusters on SDM660. Unlike SDM845 the bootloader does
++	  not program the OSM, so this driver loads the frequency/voltage
++	  tables and the sequencer microcode itself, enabling cpufreq.
++
+ config SDM_MMCC_660
+ 	tristate "SDM660 Multimedia Clock Controller"
+ 	depends on ARM64 || COMPILE_TEST
+diff --git a/drivers/clk/qcom/Makefile b/drivers/clk/qcom/Makefile
+index 0ac8a90..e7d1ff2 100644
+--- a/drivers/clk/qcom/Makefile
++++ b/drivers/clk/qcom/Makefile
+@@ -121,6 +121,7 @@ obj-$(CONFIG_SDM_DISPCC_845) += dispcc-sdm845.o
+ obj-$(CONFIG_SDM_GCC_660) += gcc-sdm660.o
+ obj-$(CONFIG_SDM_MMCC_660) += mmcc-sdm660.o
+ obj-$(CONFIG_SDM_GPUCC_660) += gpucc-sdm660.o
++obj-$(CONFIG_SDM660_CPU_CLK) += clk-cpu-sdm660.o
+ obj-$(CONFIG_SDM_GCC_845) += gcc-sdm845.o
+ obj-$(CONFIG_SDM_GPUCC_845) += gpucc-sdm845.o
+ obj-$(CONFIG_SDM_LPASSCC_845) += lpasscc-sdm845.o

@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "repositories": {
+    "pmbootstrap": {
+      "url": "https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git",
+      "commit": "7d23010a125ca7386fec4e390d14128b6c24d266",
+      "path": "tools/pmbootstrap"
+    },
+    "pmaports": {
+      "url": "https://gitlab.postmarketos.org/postmarketOS/pmaports.git",
+      "commit": "1c36715c14a2712bf3746a26dccb0ba5e93a0b2a",
+      "channels_commit": "02b84c93abb1d510de752ebb2143d83fc55f68cd"
+    }
+  },
+  "profiles": {
+    "candidate": {
+      "ports": "ports/candidate",
+      "kernel": "7.2.12",
+      "kernel_package": "7.2.12-r1",
+      "device_package": "5-r31",
+      "firmware_package": "2-r5"
+    }
+  },
+  "local_firmware": [
+    "a512_zap.elf",
+    "firmware-xiaomi-platina-bdwlan.tar.gz",
+    "firmware-xiaomi-platina-modem.tar.gz"
+  ]
+}

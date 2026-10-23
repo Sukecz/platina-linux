@@ -1,0 +1,47 @@
+From: pmOS Mi8Lite <macosmojave2@gmail.com>
+Subject: [PATCH] arm64: dts: qcom: sdm660: wire TFA9894 speaker on platina
+
+Add the TFA9894 speaker amp on blsp_i2c2 and a Secondary MI2S DAI link so the
+Q6/ADSP feeds it, giving speaker output on the Xiaomi Mi 8 Lite.
+
+Signed-off-by: pmOS Mi8Lite <macosmojave2@gmail.com>
+---
+--- a/arch/arm64/boot/dts/qcom/sdm660-xiaomi-platina.dts
++++ b/arch/arm64/boot/dts/qcom/sdm660-xiaomi-platina.dts
+@@ -1111,3 +1111,36 @@
+ 		};
+ 	};
+ };
++
++/* Speaker: NXP TFA9894 smart amp on blsp_i2c2, fed by Secondary MI2S from the
++ * Q6/ADSP. Driven in direct (DSP-bypass) mode by the tfa9894 driver. */
++&blsp_i2c2 {
++	tfa9894: audio-codec@34 {
++		compatible = "nxp,tfa9894";
++		reg = <0x34>;
++		#sound-dai-cells = <0>;
++		sound-name-prefix = "Speaker";
++	};
++};
++
++&q6afedai {
++	dai@18 {
++		reg = <SECONDARY_MI2S_RX>;
++		qcom,sd-lines = <0>;
++	};
++};
++
++&sound {
++	sec-mi2s-dai-link {
++		link-name = "Secondary MI2S Playback";
++		cpu {
++			sound-dai = <&q6afedai SECONDARY_MI2S_RX>;
++		};
++		platform {
++			sound-dai = <&q6routing>;
++		};
++		codec {
++			sound-dai = <&tfa9894>;
++		};
++	};
++};

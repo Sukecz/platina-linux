@@ -1,0 +1,57 @@
+From: pmOS Mi8Lite <macosmojave2@gmail.com>
+Subject: [PATCH] drm/panel: simple: add BOE TD4320 (Xiaomi Mi 8 Lite platina)
+
+Per the postmarketOS mainlining FAQ: when the device shows the boot splash with
+mainline (platina does), the panel is already initialized by the bootloader, so
+the simple-panel driver (no command init) should work. Add the BOE TD4320
+1080x2280 panel to panel-simple with video mode + HSE, instead of sending the
+downstream command sequence which left the panel showing stripes then black.
+
+Signed-off-by: pmOS Mi8Lite <macosmojave2@gmail.com>
+---
+--- a/drivers/gpu/drm/panel/b/drivers/gpu/drm/panel/panel-simple.c	2026-06-18 15:17:49.929505993 -0500
++++ b/drivers/gpu/drm/panel/panel-simple.c	2026-06-18 15:17:24.484507501 -0500
+@@ -5777,8 +5777,43 @@
+ 	.lanes = 4,
+ };
+ 
++static const struct drm_display_mode boe_td4320_mode = {
++	.clock = (1080 + 92 + 20 + 112) * (2280 + 12 + 4 + 60) * 60 / 1000,
++	.hdisplay = 1080,
++	.hsync_start = 1080 + 92,
++	.hsync_end = 1080 + 92 + 20,
++	.htotal = 1080 + 92 + 20 + 112,
++	.vdisplay = 2280,
++	.vsync_start = 2280 + 12,
++	.vsync_end = 2280 + 12 + 4,
++	.vtotal = 2280 + 12 + 4 + 60,
++	.width_mm = 68,
++	.height_mm = 144,
++	.type = DRM_MODE_TYPE_DRIVER,
++};
++
++static const struct panel_desc_dsi boe_td4320 = {
++	.desc = {
++		.modes = &boe_td4320_mode,
++		.num_modes = 1,
++		.bpc = 8,
++		.size = {
++			.width = 68,
++			.height = 144,
++		},
++		.connector_type = DRM_MODE_CONNECTOR_DSI,
++	},
++	.flags = MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_VIDEO_HSE |
++		 MIPI_DSI_CLOCK_NON_CONTINUOUS,
++	.format = MIPI_DSI_FMT_RGB888,
++	.lanes = 4,
++};
++
+ static const struct of_device_id dsi_of_match[] = {
+ 	{
++		.compatible = "boe,td4320",
++		.data = &boe_td4320
++	}, {
+ 		.compatible = "auo,b080uan01",
+ 		.data = &auo_b080uan01
+ 	}, {

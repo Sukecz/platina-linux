@@ -1,0 +1,33 @@
+--- a/drivers/input/touchscreen/synaptics-tcm-i2c.c
++++ b/drivers/input/touchscreen/synaptics-tcm-i2c.c
+@@ -582,6 +582,19 @@
+ 
+ /* ---- probe ---- */
+ 
++static void syna_release_regulator(void *data)
++{
++	struct syna_tcm *ts = data;
++
++	/* Balance this consumer's enable on probe failure or driver removal.
++	 * Normal panel stop still leaves the shared rail enabled.
++	 */
++	if (ts->powered) {
++		regulator_disable(ts->vdd);
++		ts->powered = false;
++	}
++}
++
+ static int syna_probe(struct i2c_client *client)
+ {
+ 	struct device *dev = &client->dev;
+@@ -604,6 +617,10 @@
+ 	if (IS_ERR(ts->vdd))
+ 		return dev_err_probe(dev, PTR_ERR(ts->vdd),
+ 				     "failed to get vdd regulator\n");
++
++	ret = devm_add_action_or_reset(dev, syna_release_regulator, ts);
++	if (ret)
++		return ret;
+ 
+ 	ts->reset_gpio = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
+ 	if (IS_ERR(ts->reset_gpio))

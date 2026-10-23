@@ -1,0 +1,88 @@
+From: pmOS Mi8Lite <macosmojave2@gmail.com>
+Subject: [PATCH] ath10k: work around WCN3990/SDM660 firmware crashes (psmode, group key, 5GHz scan)
+
+The WCN3990 WLAN firmware on SDM660 (WLAN.HL.1.0.1.c6, runs as a
+protection domain inside the modem Q6) fatally crashes
+(err_qdi.c EX:wlan_process, always PC=b00c75b8) as soon as it receives
+the WMI set_psmode command, which mac80211/ath10k send unconditionally
+during STA vif bring-up and around scans. Any scan (active or passive,
+any band) kills the firmware and only a full reboot recovers it.
+
+Port the workarounds that were verified on this device (Xiaomi Mi 8
+Lite, platina) on the 6.17-based tree:
+
+ 1. never send set_psmode on WCN3990 (skip ath10k_mac_vif_setup_ps),
+ 2. never advertise SUPPORTS_PS/SUPPORTS_DYNAMIC_PS on WCN3990 so
+    mac80211 does not trigger PS transitions,
+ 3. force passive scan on 5GHz (firmware does not tune the radio on
+    active 5GHz scans; rx_clear_count is identical across channels),
+ 4. don't install a junk group key on DISABLE_KEY on WCN3990 (crashes
+    the firmware on disconnect - same class of bug).
+
+Signed-off-by: pmOS Mi8Lite <macosmojave2@gmail.com>
+---
+--- a/drivers/net/wireless/ath/ath10k/mac.c
++++ b/drivers/net/wireless/ath/ath10k/mac.c
+@@ -290,9 +290,12 @@
+ 		key->flags |= IEEE80211_KEY_FLAG_GENERATE_IV;
+ 
+ 	if (cmd == DISABLE_KEY) {
+-		if (flags & WMI_KEY_GROUP) {
++		if ((flags & WMI_KEY_GROUP) && !QCA_REV_WCN3990(ar)) {
+ 			/* Not all hardware handles group-key deletion operation
+ 			 * correctly. Replace the key with a junk value to invalidate it.
++			 * On WCN3990 (WLAN.HL.1.0.1 firmware in the SDM660 modem)
++			 * installing a junk group key crashes the firmware, so take
++			 * the plain-disable path there.
+ 			 */
+ 			get_random_bytes(key->key, key->keylen);
+ 		} else {
+@@ -1959,6 +1962,16 @@
+ 
+ 	lockdep_assert_held(&arvif->ar->conf_mutex);
+ 
++	/*
++	 * The WCN3990 WLAN firmware on the SDM660 (running inside the modem
++	 * Q6) crashes with EX:wlan_process PC=b00c75b8 as soon as it receives
++	 * the WMI set_psmode command. This command is otherwise sent
++	 * unconditionally during STA vif bring-up / scan. Skip it entirely on
++	 * WCN3990 so the firmware stays alive and scan/connect can proceed.
++	 */
++	if (QCA_REV_WCN3990(ar))
++		return 0;
++
+ 	if (arvif->vif->type != NL80211_IFTYPE_STATION)
+ 		return 0;
+ 
+@@ -3450,6 +3463,14 @@
+ 			passive = channel->flags & IEEE80211_CHAN_NO_IR;
+ 			ch->passive = passive;
+ 
++			/* Force passive scan on 5GHz to work around WCN3990
++			 * firmware bug where active scan doesn't tune the
++			 * radio on 5GHz non-DFS channels. The radio reports
++			 * identical rx_clear_count across channels.
++			 */
++			if (QCA_REV_WCN3990(ar) && band == NL80211_BAND_5GHZ)
++				ch->passive = true;
++
+ 			/* the firmware is ignoring the "radar" flag of the
+ 			 * channel and is scanning actively using Probe Requests
+ 			 * on "Radar detection"/DFS channels which are not
+@@ -10072,7 +10093,15 @@
+ 
+ 	ieee80211_hw_set(ar->hw, SIGNAL_DBM);
+ 
+-	if (!test_bit(ATH10K_FW_FEATURE_NO_PS,
++	/*
++	 * The WCN3990 WLAN firmware (WLAN.HL.1.0.1.c6) running inside the modem
++	 * on the SDM660 crashes (EX:wlan_process, PC=b00c75b8) the moment it
++	 * receives the WMI set_psmode command that mac80211 triggers when power
++	 * save is advertised. Do not advertise PS for WCN3990 so mac80211 never
++	 * sends set_psmode; this keeps the device operational (scan/connect).
++	 */
++	if (!QCA_REV_WCN3990(ar) &&
++	    !test_bit(ATH10K_FW_FEATURE_NO_PS,
+ 		      ar->running_fw->fw_file.fw_features)) {
+ 		ieee80211_hw_set(ar->hw, SUPPORTS_PS);
+ 		ieee80211_hw_set(ar->hw, SUPPORTS_DYNAMIC_PS);

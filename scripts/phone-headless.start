@@ -1,0 +1,27 @@
+#!/bin/sh
+# Always start dark. Display the installed release briefly in the background.
+for path in /sys/class/backlight/*/brightness; do
+    [ -w "$path" ] && printf '0\n' > "$path"
+done
+if [ -x /usr/local/sbin/platina-splash ] && [ -r /usr/local/share/platina/current/release.json ]; then
+    umask 027
+    (
+        driver=$(readlink -f /sys/bus/mipi-dsi/devices/c994000.dsi.0/driver 2>/dev/null || true)
+        if [ "${driver##*/}" = panel-novatek-nt36672a ]; then
+            timeout -s TERM -k 3 15 /usr/local/sbin/platina-display show --boot --seconds 7
+        elif [ -r /usr/local/lib/platina/display/module.json ]; then
+            timeout -s TERM -k 3 15 /usr/local/sbin/platina-display-session --boot --seconds 7
+        else
+            timeout -s TERM -k 3 12 /usr/local/sbin/platina-splash --boot --seconds 7
+        fi
+        # Recover full panel powerdown even after the outer timeout killed a renderer.
+        if [ "${driver##*/}" = panel-novatek-nt36672a ]; then
+            /usr/local/sbin/platina-display off
+        fi
+        # Also recover brightness if timeout had to stop the renderer.
+        for path in /sys/class/backlight/*/brightness; do
+            [ -w "$path" ] && printf '0\n' > "$path"
+        done
+    ) >> /var/log/platina-splash.log 2>&1 &
+fi
+exit 0

@@ -1,0 +1,40 @@
+From: pmOS Mi8Lite <macosmojave2@gmail.com>
+Subject: [PATCH] ath10k: don't request scan channel stats on WCN3990
+
+The WLAN.HL.1.0.1.c6 firmware of the WCN3990 on SDM660 (Xiaomi Mi 8
+Lite, platina) fatally asserts (err_qdi.c EX:wlan_process, RT:2072,
+a fixed ~87ms after tuning to every scan channel) whenever the scan is
+requested with WMI_SCAN_CHAN_STAT_EVENT. Bisected at runtime with WMI
+flag knobs after eliminating board data, regdomain, channel powers,
+trailing TLVs, firmware/modem builds, PS mode, band crossing and
+regulators/clocks: clearing this single bit turns every scan from a
+guaranteed firmware crash into a reliable full scan of both bands
+(30 BSS found in testing). Reading the MAC cycle counters for the
+channel stats appears to hit a dead hardware block on this platform.
+
+Don't set the flag on WCN3990. Only channel survey data is lost.
+
+Signed-off-by: pmOS Mi8Lite <macosmojave2@gmail.com>
+---
+--- a/drivers/net/wireless/ath/ath10k/wmi.c
++++ b/drivers/net/wireless/ath/ath10k/wmi.c
+@@ -7096,7 +7096,18 @@
+ 		| WMI_SCAN_EVENT_FOREIGN_CHANNEL
+ 		| WMI_SCAN_EVENT_FOREIGN_CHANNEL_EXIT
+ 		| WMI_SCAN_EVENT_DEQUEUED;
+-	arg->scan_ctrl_flags |= WMI_SCAN_CHAN_STAT_EVENT;
++	/* On the WCN3990 of the SDM660 (WLAN.HL.1.0.1.c6 firmware running
++	 * inside the modem, Xiaomi Mi 8 Lite) requesting channel stats makes
++	 * the WLAN firmware fatally assert (err_qdi.c EX:wlan_process,
++	 * RT:2072) a fixed ~87ms after tuning to every scan channel - active
++	 * or passive, any band, any board data. Reading the MAC cycle
++	 * counters for the stats appears to hit a dead hardware block on
++	 * this platform (rx_clear_count was already known to read frozen).
++	 * Bisected at runtime via WMI flag knobs: clearing this single flag
++	 * makes scans complete reliably. Only channel survey data is lost.
++	 */
++	if (!QCA_REV_WCN3990(ar))
++		arg->scan_ctrl_flags |= WMI_SCAN_CHAN_STAT_EVENT;
+ 	arg->n_bssids = 1;
+ 	arg->bssids[0].bssid = "\xFF\xFF\xFF\xFF\xFF\xFF";
+ }

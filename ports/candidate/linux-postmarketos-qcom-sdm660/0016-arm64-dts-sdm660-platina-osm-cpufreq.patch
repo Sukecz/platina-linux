@@ -1,0 +1,101 @@
+From: Platina local project
+Subject: [PATCH] Rebase platina OSM nodes after preceding display/battery patches
+
+Keep upstream OSM data unchanged; the original patch incorrectly expected
+the USB block to be at EOF although patch 0001 appends display nodes there.
+---
+--- a/arch/arm64/boot/dts/qcom/sdm660-xiaomi-platina.dts
++++ b/arch/arm64/boot/dts/qcom/sdm660-xiaomi-platina.dts
+@@ -15,6 +15,7 @@
+ #include <dt-bindings/input/gpio-keys.h>
+ #include <dt-bindings/leds/common.h>
+ #include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
++#include <dt-bindings/clock/qcom,gcc-sdm660.h>
+ 
+ / {
+ 	model = "Xiaomi Mi 8 Lite";
+@@ -930,3 +931,84 @@
+ 
+ 	status = "okay";
+ };
++
++/*
++ * CPU frequency scaling via the OSM (clk-cpu-sdm660 driver). First-cut OPPs
++ * stay within each rail's boot-time voltage corner (little <= 1382 MHz,
++ * big <= 1113 MHz), so nothing is under-volted; raise once the OSM voltage
++ * path is confirmed to move VDD_APCC.
++ */
++&{/} {
++	cpu_osm: clock-controller@179c0000 {
++		compatible = "qcom,sdm660-osm";
++		reg = <0x0 0x179c0000 0x0 0x4000>;
++		reg-names = "osm";
++		clocks = <&gcc HMSS_GPLL0_CLK_SRC>;
++		clock-names = "aux";
++		#clock-cells = <1>;
++
++		/* r56: exact LUT from LineageOS /proc/device-tree (speed bin 1). */
++		qcom,pwrcl-speedbin0-v0 =
++			<  300000000 0x0004000f 0x01200020 0x1 1 >,
++			<  633600000 0x05040021 0x03200020 0x1 2 >,
++			<  902400000 0x0404002f 0x04260026 0x1 3 >,
++			< 1113600000 0x0404003a 0x052e002e 0x2 4 >,
++			< 1401600000 0x04040049 0x073a003a 0x2 5 >,
++			< 1536000000 0x04040050 0x08400040 0x2 6 >,
++			< 1747200000 0x0404005b 0x09480048 0x2 7 >,
++			< 1843200000 0x04040060 0x094c004c 0x3 8 >;
++
++		qcom,perfcl-speedbin1-v0 =
++			<  300000000 0x0004000f 0x01200020 0x1 1 >,
++			< 1113600000 0x0404003a 0x052e002e 0x1 2 >,
++			< 1401600000 0x04040049 0x073a003a 0x2 3 >,
++			< 1747200000 0x0404005b 0x09480048 0x2 4 >,
++			< 1958400000 0x04040066 0x0a510051 0x2 5 >,
++			< 2150400000 0x04040070 0x0b590059 0x2 6 >,
++			< 2208000000 0x04040073 0x0b5c005c 0x3 7 >;
++
++		qcom,pwrcl-voltage-ceiling =
++			< 724000 724000 724000 788000 868000
++			  1068000 1068000 1068000 >;
++		qcom,perfcl-voltage-ceiling =
++			< 724000 724000 788000 868000 988000 988000 1068000 >;
++	};
++
++	/* CPRh: puts the CPU voltage rails in HW closed-loop for the OSM. */
++	cprh_cpu: cpr@179c8000 {
++		compatible = "qcom,sdm660-cprh";
++		clocks = <&gcc GCC_HMSS_RBCPR_CLK>;
++		clock-names = "core_clk";
++	};
++
++	/*
++	 * r56: OPP freqs match the real LUT points exactly and stay <= NOM
++	 * corner (little <= 1113.6, big <= 1401.6) so the NOM-clamped CPRh never
++	 * under-volts. Raise once transitions are confirmed and CPRh TURBO added.
++	 */
++	cpu0_opp_table: opp-table-cpu0 {
++		compatible = "operating-points-v2";
++		opp-shared;
++		opp-300000000  { opp-hz = /bits/ 64 <300000000>; };
++		opp-633600000  { opp-hz = /bits/ 64 <633600000>; };
++		opp-902400000  { opp-hz = /bits/ 64 <902400000>; };
++		opp-1113600000 { opp-hz = /bits/ 64 <1113600000>; };
++	};
++
++	cpu4_opp_table: opp-table-cpu4 {
++		compatible = "operating-points-v2";
++		opp-shared;
++		opp-300000000  { opp-hz = /bits/ 64 <300000000>; };
++		opp-1113600000 { opp-hz = /bits/ 64 <1113600000>; };
++		opp-1401600000 { opp-hz = /bits/ 64 <1401600000>; };
++	};
++};
++
++&cpu0 { clocks = <&cpu_osm 0>; operating-points-v2 = <&cpu0_opp_table>; };
++&cpu1 { clocks = <&cpu_osm 0>; operating-points-v2 = <&cpu0_opp_table>; };
++&cpu2 { clocks = <&cpu_osm 0>; operating-points-v2 = <&cpu0_opp_table>; };
++&cpu3 { clocks = <&cpu_osm 0>; operating-points-v2 = <&cpu0_opp_table>; };
++&cpu4 { clocks = <&cpu_osm 1>; operating-points-v2 = <&cpu4_opp_table>; };
++&cpu5 { clocks = <&cpu_osm 1>; operating-points-v2 = <&cpu4_opp_table>; };
++&cpu6 { clocks = <&cpu_osm 1>; operating-points-v2 = <&cpu4_opp_table>; };
++&cpu7 { clocks = <&cpu_osm 1>; operating-points-v2 = <&cpu4_opp_table>; };

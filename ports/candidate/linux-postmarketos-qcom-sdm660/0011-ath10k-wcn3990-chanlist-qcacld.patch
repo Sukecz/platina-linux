@@ -1,0 +1,69 @@
+From: pmOS Mi8Lite <macosmojave2@gmail.com>
+Subject: [PATCH] ath10k: WCN3990/SDM660: encode scan channel list like qcacld
+
+The WLAN.HL.1.0.1 firmware running in the SDM660 modem fatally asserts
+(err_qdi.c EX:wlan_process) on the first channel tune of any scan,
+active or passive, on any band. Verified on Xiaomi Mi 8 Lite (platina)
+to be independent of: board data file used (all 18 device calibrations),
+regdomain in the board data (0x809c and unlocked 0x0), firmware build
+(c6-00023 and c6-00027), modem build (-00076 and -00087), regulators
+(all rails verified on at runtime) and the RF reference clock (on).
+
+What does differ is the WMI_SCAN_CHAN_LIST payload. qcacld (the stock
+Android driver, which scans fine on the same device/firmware) sends per
+channel only the regulatory power, in plain dBm, leaving max_power,
+max_tx_power, antenna_max and reg_class_id at zero, and does not allow
+VHT on 2.4GHz. Mainline ath10k sends max_power/reg_power/max_tx_power
+as doubled half-dBm values (e.g. 40 for 20dBm) while the firmware's WMI
+headers document max_tx_power as "1 dBm units"; the firmware's TPC
+lookup against the per-device board data then fails at tune time.
+
+Mirror the qcacld encoding on WCN3990.
+
+Signed-off-by: pmOS Mi8Lite <macosmojave2@gmail.com>
+---
+--- a/drivers/net/wireless/ath/ath10k/mac.c
++++ b/drivers/net/wireless/ath/ath10k/mac.c
+@@ -3449,7 +3449,11 @@
+ 			ch->allow_ht = true;
+ 
+ 			/* FIXME: when should we really allow VHT? */
+-			ch->allow_vht = true;
++			if (QCA_REV_WCN3990(ar))
++				/* qcacld only allows VHT on 5GHz; mirror it */
++				ch->allow_vht = channel->band == NL80211_BAND_5GHZ;
++			else
++				ch->allow_vht = true;
+ 
+ 			ch->allow_ibss =
+ 				!(channel->flags & IEEE80211_CHAN_NO_IR);
+@@ -3481,9 +3485,26 @@
+ 			ch->freq = channel->center_freq;
+ 			ch->band_center_freq1 = channel->center_freq;
+ 			ch->min_power = 0;
+-			ch->max_power = channel->max_power * 2;
+-			ch->max_reg_power = channel->max_reg_power * 2;
+-			ch->max_antenna_gain = channel->max_antenna_gain;
++			if (QCA_REV_WCN3990(ar)) {
++				/* The WLAN.HL.1.0.1 firmware on the SDM660
++				 * modem takes these fields the way qcacld
++				 * sends them: only the regulatory power, in
++				 * plain dBm (max_tx_power is documented as
++				 * "1 dBm units" in the WMI headers). The
++				 * doubled half-dBm values below make the TPC
++				 * lookup against the per-device board data
++				 * fail and the firmware fatally asserts on
++				 * the first channel tune of any scan
++				 * (err_qdi.c EX:wlan_process).
++				 */
++				ch->max_power = 0;
++				ch->max_reg_power = channel->max_reg_power;
++				ch->max_antenna_gain = 0;
++			} else {
++				ch->max_power = channel->max_power * 2;
++				ch->max_reg_power = channel->max_reg_power * 2;
++				ch->max_antenna_gain = channel->max_antenna_gain;
++			}
+ 			ch->reg_class_id = 0; /* FIXME */
+ 
+ 			/* FIXME: why use only legacy modes, why not any

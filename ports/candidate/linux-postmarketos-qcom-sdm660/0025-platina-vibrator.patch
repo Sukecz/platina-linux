@@ -1,0 +1,17 @@
+From: Platina local project
+Subject: [PATCH] Rebase unchanged PM660 haptics node after Bluetooth
+
+The previous Bluetooth patch appends nodes after the original sound context.
+Keep the haptics setting unchanged and append it after those nodes.
+---
+--- a/arch/arm64/boot/dts/qcom/sdm660-xiaomi-platina.dts
++++ b/arch/arm64/boot/dts/qcom/sdm660-xiaomi-platina.dts
+@@ -1179,3 +1179,8 @@
+ 		max-speed = <3200000>;
+ 	};
+ };
++
++/* Vibrator: PM660 SPMI haptics (LRA). Proven on jasmine/whyred/lavender. */
++&pm660_haptics {
++	status = "okay";
++};

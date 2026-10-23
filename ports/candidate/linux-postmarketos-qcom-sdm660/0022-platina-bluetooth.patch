@@ -1,0 +1,46 @@
+From: pmOS Mi8Lite <macosmojave2@gmail.com>
+Subject: [PATCH] arm64: dts: qcom: sdm660-xiaomi-platina: enable WCN3990 Bluetooth
+
+Enable the WCN3990 Bluetooth (hci_qca serdev on the BLSP2 UART1 4-wire
+port). It is the same combo die as the already-working WiFi; the four
+VDD rails are shared with &wifi and ref-counted by the regulator core.
+This mirrors the known-working sdm660-xiaomi-lavender BT config, and
+adds the serial1 alias lavender uses for the BT UART.
+
+Split out of the old 0022-platina-bt-vibrator so BT and the vibrator can
+be validated (and, if needed, bisected) independently on the device.
+
+Signed-off-by: pmOS Mi8Lite <macosmojave2@gmail.com>
+--- a/arch/arm64/boot/dts/qcom/sdm660-xiaomi-platina.dts	2026-07-15 15:35:10.645379298 -0500
++++ b/arch/arm64/boot/dts/qcom/sdm660-xiaomi-platina.dts	2026-07-15 15:35:10.670546665 -0500
+@@ -26,6 +26,7 @@
+ 
+ 	aliases {
+ 		serial0 = &blsp1_uart2;
++		serial1 = &blsp2_uart1; /* Bluetooth UART */
+ 	};
+ 
+ 	chosen {
+@@ -1159,3 +1160,22 @@
+ &sound {
+ 	pinctrl-0 = <&cdc_pdm_default>, <&cdc_dmic_default>, <&sec_mi2s_default>;
+ };
++
++/*
++ * Bluetooth: WCN3990 combo chip (shares the die with the WiFi) on the
++ * BLSP2 UART1 4-wire port via hci_qca. The four VDD rails are the same
++ * ones the WiFi (&wifi) votes for the shared chip; the regulator core
++ * ref-counts them. Mirrors the known-working sdm660-xiaomi-lavender BT.
++ */
++&blsp2_uart1 {
++	status = "okay";
++
++	bluetooth {
++		compatible = "qcom,wcn3990-bt";
++		vddxo-supply = <&vreg_l9a_1p8>;
++		vddrf-supply = <&vreg_l6a_1p3>;
++		vddch0-supply = <&vreg_l19a_3p3>;
++		vddio-supply = <&vreg_l13a_1p8>;
++		max-speed = <3200000>;
++	};
++};

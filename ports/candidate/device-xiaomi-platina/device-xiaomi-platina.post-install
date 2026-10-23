@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+if [ -f /usr/share/platina/avahi-daemon.conf ]; then
+    mkdir -p /etc/avahi
+    cp /usr/share/platina/avahi-daemon.conf /etc/avahi/avahi-daemon.conf
+    chmod 644 /etc/avahi/avahi-daemon.conf
+fi
+# Headless/OpenRC image: enable network and time services without the UI meta package.
+if command -v rc-update >/dev/null 2>&1; then
+    for service in local networkmanager usb-moded chronyd avahi-daemon; do
+        rc-update add "$service" default
+    done
+fi

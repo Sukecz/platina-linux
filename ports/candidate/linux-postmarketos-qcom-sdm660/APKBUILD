@@ -1,0 +1,155 @@
+# Kernel config based on: arch/arm64/configs/sdm660_defconfig
+maintainer="Alexey Minnekhanov <alexeymin@minlexx.ru>"
+_flavor="postmarketos-qcom-sdm660"
+pkgname=linux-$_flavor
+pkgver=7.2.12
+pkgrel=1
+pkgdesc="Close to mainline linux kernel for Qualcomm Snapdragon 660 SoC"
+arch="aarch64"
+url="https://kernel.org/"
+license="GPL-2.0-only"
+options="!strip !check !tracedeps
+	pmb:cross-native
+	pmb:kconfigcheck-community
+	"
+makedepends="
+	bison
+	clang
+	findutils
+	flex
+	lld
+	llvm
+	openssl-dev
+	perl
+	postmarketos-installkernel
+	python3
+	zstd
+	pahole
+	linux-headers
+	elfutils-dev
+	"
+
+_commit="dd1ed52c8ceef4f16715118ed0252fe75adbe71d"
+
+source="
+	linux-$_commit.tar.gz::https://codeload.github.com/sdm660-mainline/linux/tar.gz/$_commit
+	config-$_flavor.aarch64
+	0001-platina-enable-display.patch
+	0002-panel-simple-td4320.patch
+	0004-synaptics-tcm-driver.patch
+	0006-platina-battery.patch
+	0007-platina-wifi.patch
+	0010-ath10k-wcn3990-no-psmode.patch
+	0011-ath10k-wcn3990-chanlist-qcacld.patch
+	0012-ath10k-wcn3990-scan-trailing-tlvs.patch
+	0014-ath10k-wcn3990-no-scan-chan-stat.patch
+	0015-clk-qcom-sdm660-cpu-osm-driver.patch
+	0016-arm64-dts-sdm660-platina-osm-cpufreq.patch
+	0017-clk-qcom-sdm660-cprh-driver.patch
+	0018-platina-audio.patch
+	0020-tfa9894-codec.patch
+	0021-platina-speaker.patch
+	0024-platina-sec-mi2s-pinctrl.patch
+	0022-platina-bluetooth.patch
+	0025-platina-vibrator.patch
+	0026-platina-7.2-wifi-debug.patch
+	0027-platina-7.2-audio-machine.patch
+	0028-platina-touch-regulator-cleanup.patch
+	0029-sdm660-mdp-clock-safe-rate-change.patch
+	0030-platina-tianma-panel.patch
+	stable-7.2.3-4.patch
+	stable-7.2.4-5.patch
+	stable-7.2.5-6.patch
+	stable-7.2.6-7.patch
+	stable-7.2.7-8.patch
+	stable-7.2.8-9.patch
+	stable-7.2.9-10.patch
+	stable-7.2.10-11.patch
+	stable-7.2.11-12.patch
+"
+
+_carch="arm64"
+
+# for some reason, the directory inside .tar.gz does not match tag name: leading
+#     "v" is missing, so we can't use $_tag here
+builddir="$srcdir/linux-$_commit"
+
+prepare() {
+	default_prepare
+	cp -v "$srcdir/config-$_flavor.$CARCH" "$builddir"/.config
+}
+
+build() {
+	unset LDFLAGS
+
+	make ARCH="$_carch" LLVM=1 \
+		KBUILD_BUILD_VERSION="$((pkgrel + 1 ))-$_flavor" all Image.gz
+}
+
+package() {
+	mkdir -p "$pkgdir"/boot
+
+	make modules_install dtbs_install \
+		ARCH="$_carch" \
+		LLVM=1 \
+		INSTALL_PATH="$pkgdir"/boot \
+		INSTALL_MOD_PATH="$pkgdir"/usr \
+		INSTALL_MOD_STRIP=1 \
+		INSTALL_DTBS_PATH="$pkgdir/boot/dtbs-tmp"
+
+	install -D "$builddir/arch/arm64/boot/vmlinuz.efi" \
+		"$pkgdir/boot/vmlinuz.efi"
+
+	install -D "$builddir/arch/arm64/boot/Image.gz" \
+		"$pkgdir/boot/vmlinuz"
+
+	# Reduce package size, install only qcom SDM630/636/660 dtbs.
+	# This reduces .apk size from ~46 Mb to ~30 Mb.
+	mkdir -p "$pkgdir"/boot/dtbs/qcom
+	cp -r "$pkgdir"/boot/dtbs-tmp/qcom/sda660* "$pkgdir"/boot/dtbs/qcom
+	cp -r "$pkgdir"/boot/dtbs-tmp/qcom/sdm630* "$pkgdir"/boot/dtbs/qcom
+	cp -r "$pkgdir"/boot/dtbs-tmp/qcom/sdm636* "$pkgdir"/boot/dtbs/qcom
+	cp -r "$pkgdir"/boot/dtbs-tmp/qcom/sdm660* "$pkgdir"/boot/dtbs/qcom
+	rm -r "$pkgdir"/boot/dtbs-tmp
+
+	rm -f "$pkgdir"/lib/modules/*/build "$pkgdir"/lib/modules/*/source
+
+	install -D "$builddir/include/config/kernel.release" \
+		"$pkgdir/usr/share/kernel/$_flavor/kernel.release"
+}
+sha512sums="
+b56636f4d7429e971a70c1b7237fda4d5795fbe422c01f6fc6038220c2e831bf4479bd411b5e04e4db45de4fb8ec15a9e0e312b6479e2067709062af3dfd6997  linux-dd1ed52c8ceef4f16715118ed0252fe75adbe71d.tar.gz
+2a21ce86163c1f33d2fc8bf1d84823c4c6221f67abdcb32e7a11f27325eb5dc7ffc968bc56d15b469aa5aa4b8381ba077e6abe018bd69a69049124e331228304  config-postmarketos-qcom-sdm660.aarch64
+0ed47ad2e1cf773a49ab542b4f6ccc2baf61a4186e51cda8f70bacce6c30c687305f8c7f327cdd9b3919358ca18eaac28c7c9b82bfec73e5fe492663afdec825  0001-platina-enable-display.patch
+83b9efa9b1a46499d1936f9e3f90b832458ace687a5ad3892ae1787a09997491efb9cc1bb0db44007adda97900ae2e3ce1b7dafa28ecb4cd84a95ade8667f05b  0002-panel-simple-td4320.patch
+2ff1034abfbaf3c5bf56233b46a6c5a066015a982d4e55e5fd34c5d908d145305c7a99fd7731057b8fd5b9afc3e595b60856f6e0a0af921cfbff068eb744757b  0004-synaptics-tcm-driver.patch
+727180fca4f9846de890f73cc8636e3a1eccb8a05b0ad60613407e967857b377356c8380d2fa27b453cf4bc63b71d8be45b09b0039396794ba16259dcc9d5901  0006-platina-battery.patch
+c7d469c265fcae3280a008a3114cd516bb0a90dfe25ad5357bd09ba48175bf79ce589c661fec71ff83e48887d90b9b1e987a04ad5de03130e9e1212f0f470966  0007-platina-wifi.patch
+f7a8b7272ccb70b6a3a0049006ec608960fd876bf43ebf2c5880c92d1e55e7953a31dff37a2b219756f39e5baac4e8d6beee1407094fd07e812d513e9cd8397c  0010-ath10k-wcn3990-no-psmode.patch
+e8a8b9382cdb3543b9ed73d309bfc37d41be96852b92ba46beed78b880186e71e3d73a151acb9893f8f13764e9265bf5a50865b2c2329feeb064039b70721091  0011-ath10k-wcn3990-chanlist-qcacld.patch
+a60a9faec11342f4ac0388b612edbbbe132269d2fd68bbbd2709fa0af068f1c9d27b57d5ebf0c6fc99792609eee0d715572ec160e41698bf0ae11a5c5cab7cf1  0012-ath10k-wcn3990-scan-trailing-tlvs.patch
+ae81f328100b9a6f756c68f5fcda2618ea866349c2ce291703f5f817b42d3a0954c772ed6f063d8132f522837e3eaa2978c61564cd19536f4442eb381e636680  0014-ath10k-wcn3990-no-scan-chan-stat.patch
+f8a47c452ec42a4c9278bd7e40e83ecea1d18c6eb76099e8e5526788275e2afac24bc2b415c22e1e41a3fda14ce07dc968e3e7e95b91122226a1fb098b027305  0015-clk-qcom-sdm660-cpu-osm-driver.patch
+36aef2306a6bb302e69891bf6619cfdfa81bc2e09cd2e4a2a15371f39af5755cf1045e061a1561d7375d8cfd8659dd2d81cab0296c62d90f7b256894fa28ea14  0016-arm64-dts-sdm660-platina-osm-cpufreq.patch
+71cd673724dda58e0af4c50d428d3739114eb32640da84823c84ffb8342ab1106f361cc5c780d58827bbc854285f06acdce17ffa486d3a4d14b786c1c415e318  0017-clk-qcom-sdm660-cprh-driver.patch
+110ad7640090163637a29fa61d5901b7424a2516be9f3131094fbecdb0ce69d705b3584a49ce27ae1d7c3319eefac974912e78fa65ede2baadd4135f724fc20b  0018-platina-audio.patch
+49e5d4ffac1120cade440bc5df28995686a074699b36874e52cf49c33cf2b3e74012c819cd1d0040738af153bf3273635702c9b8a955f1984b2cc6bd541e85de  0020-tfa9894-codec.patch
+93d75da385d8b8fd93bfc038a182ddecab8dd1367a7b0c937c3a73160699749c78154454d957cb740d16d6ad1b2afa72ab453581138f78ec4e884787c3997fac  0021-platina-speaker.patch
+af6e09b560c497300e57b5b74ce5e8f59740091045a9dcd0dc8299018d9ff88b958c6476a5c1fc00060d649118e34011bd5481261aa52f1b56d1d522618bbf76  0024-platina-sec-mi2s-pinctrl.patch
+ae97edcc2302b088a3d83539139199e9f5a19c3a11f66a3512b979b93673755f300b6458f7ddfaaa769b9f735e9d99f7abcbca37951e6cb767a6239e245cdf8b  0022-platina-bluetooth.patch
+73eb732191f8ea7ce41a0810b390f407e525a4cecf317e7ead8ce42b1b7fd0b249c37619b0164e1c9241dbe53a605f7d6681ce589dc506a36f1a40b891db328d  0025-platina-vibrator.patch
+1bb9b6f31c3e8c5847bd41dd5e2ad1971842bde316d027bd5a5f262febc53566a1542027d8ee726a83947f2b9a5f6e0c76bee138771cdef3368601d99fd071b9  0026-platina-7.2-wifi-debug.patch
+81bb48b72a639df602deb7447dcb7c28e56daa14e5d86b76a49f8ac7b2cea10f8c38cabdeee61448408097ac765596539245fec9e3f3f3379fe7451438f8108f  0027-platina-7.2-audio-machine.patch
+c04261993d81ae94ae8f6e86df93e6e37390fd8b7746f8d54eaf957e818cdf92691fdeb8b9a5adae220fcd199189aea268c837b6482e13a70a9de9aeaafaacc5  0028-platina-touch-regulator-cleanup.patch
+07f552abed2177d7c0a4fd731692c934d54f8ad4d117ecad3e1eab4ceedd546b07c6fc01c693dae65a09fc1581b987db4bb7f3cdffa4488b20919a32a1790621  0029-sdm660-mdp-clock-safe-rate-change.patch
+e845d83a8bb8e7bb7cc59bb309b78b920460f4d31b9c962e00119321e3f01a65bfcc2cc3185d609a0b99a73c9deed5d705d58afdf06d8dac2e409ad15f821d68  0030-platina-tianma-panel.patch
+1a7f9cf2443c0f059ac64a78dddee77fca584288edeea943aa45db05fb5e3b7b2930dab595f6c0911671bf5517bd64550a65b097f47d5179cc7454ec90db56cd  stable-7.2.3-4.patch
+303d4a717c67d5dbb5d17c37882b3ef1b6b44b3cf9b17723a611efe1f028019d5ef53c0e3595ed79f5468a46ede2d640171b9dd97ce2dd99b487d0406ef79f16  stable-7.2.4-5.patch
+b09a94d0eb3c0382ad8998843019ea0d52ae5a89ad7ba54072b21eeea2c7ee602c57a32a0d9b99a2c5ae1f581dadc4d4395096e905b54678affc18125d9b8cba  stable-7.2.5-6.patch
+4b527cf54dd581408cbb44ace82ea975baa656cf12c9cd35356ce6c4e05901c27d498c3b3a956f84dcf5f5ac436da39cb37cd535353f024c7877e315f455062e  stable-7.2.6-7.patch
+526e8061f3906876bcd9db2f7c82a31c438c2d2c56701208041edb932bd66473ff8f221b22af24b687f14e85852dbbb1d8058cdc63f29ca30f14bb1590216733  stable-7.2.7-8.patch
+e34cc3b376501b8db887eeb79950adb84906641062ef0e60a9bdbedb3b43e956dd5c56f1967df8ad274454c3d9df03867c37dcf62cdb5d80a9a59eddfa831776  stable-7.2.8-9.patch
+be7770c858be5b7b559b959fc6f50ca6d94a7f518ee67c8e675e01ab583fc043c10cbeb6971079a13394a981f8153906839cdf409fef6f4279709ecc93495eff  stable-7.2.9-10.patch
+d2449e4c02bf11835d20bd9c841a3b0db78ba14ebe2effaec04d98db63ea4dc41a552d23db8ae72e10d2675d1b20570f06a250c790dc773f95f0be4a14c706e9  stable-7.2.10-11.patch
+eb3b89ac99648776f193ee3c9d96d257f7d2e6ba5200a526e63c97e7dc4982e4b2985f15481aa4314dc54ca5f0bafb395b4f4fc375ed4fba2b8d9ca23124cd31  stable-7.2.11-12.patch
+"

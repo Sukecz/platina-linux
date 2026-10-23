@@ -1,0 +1,60 @@
+From: pmOS Mi8Lite <macosmojave2@gmail.com>
+Subject: [PATCH] ath10k: wmi-tlv: append the trailing scan TLVs qcacld sends
+
+The WLAN.HL.1.0.1.c6 firmware of the WCN3990 on SDM660 fatally asserts
+(err_qdi.c EX:wlan_process, RT:2072) as soon as the scan state machine
+processes the first channel of any scan (active or passive, any band).
+Verified on Xiaomi Mi 8 Lite (platina) to be independent of board data,
+regdomain, firmware/modem build, regulators, RF clock, power values in
+the channel list, and PS mode.
+
+qcacld - the driver this firmware was developed against, and which scans
+fine on the same device - always appends two more TLVs to
+WMI_START_SCAN_CMDID after the IE array: the probe request vendor OUI
+whitelist (ARRAY_STRUC) and the per-channel phy mode list (ARRAY_BYTE),
+both zero-length in a normal scan ("Add ZERO legth phy mode TLV" in
+wmi_unified_tlv.c). Mainline stops after the IE array. Append the two
+trailing zero-length TLVs to match qcacld's wire format.
+
+Signed-off-by: pmOS Mi8Lite <macosmojave2@gmail.com>
+---
+--- a/drivers/net/wireless/ath/ath10k/wmi-tlv.c
++++ b/drivers/net/wireless/ath/ath10k/wmi-tlv.c
+@@ -1995,7 +1995,9 @@
+ 	      sizeof(*tlv) + chan_len +
+ 	      sizeof(*tlv) + ssid_len +
+ 	      sizeof(*tlv) + bssid_len +
+-	      sizeof(*tlv) + ie_len;
++	      sizeof(*tlv) + ie_len +
++	      sizeof(*tlv) +		/* zero-length vendor OUI array */
++	      sizeof(*tlv);		/* zero-length phy mode list */
+ 
+ 	skb = ath10k_wmi_alloc_skb(ar, len);
+ 	if (!skb)
+@@ -2065,6 +2067,26 @@
+ 	ptr += sizeof(*tlv);
+ 	ptr += ie_len;
+ 
++	/* The WMI-TLV firmware of the WCN3990 on SDM660 (WLAN.HL.1.0.1.c6)
++	 * expects the two trailing arrays qcacld always appends to
++	 * WMI_START_SCAN_CMDID, even when they are empty: the probe request
++	 * vendor OUI whitelist and the per-channel phy mode list. Without
++	 * them the firmware accepts the command but fatally asserts
++	 * (err_qdi.c EX:wlan_process) as soon as the scan state machine
++	 * processes the first channel. Append both as zero-length TLVs,
++	 * exactly like qcacld does for a normal (non wide-band, no
++	 * whitelist) scan.
++	 */
++	tlv = ptr;
++	tlv->tag = __cpu_to_le16(WMI_TLV_TAG_ARRAY_STRUCT);
++	tlv->len = __cpu_to_le16(0);
++	ptr += sizeof(*tlv);
++
++	tlv = ptr;
++	tlv->tag = __cpu_to_le16(WMI_TLV_TAG_ARRAY_BYTE);
++	tlv->len = __cpu_to_le16(0);
++	ptr += sizeof(*tlv);
++
+ 	ath10k_dbg(ar, ATH10K_DBG_WMI, "wmi tlv start scan\n");
+ 	return skb;
+ }

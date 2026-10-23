@@ -1,0 +1,59 @@
+# Local experimental headless adaptation; see project docs/SOURCE-AUDIT.md.
+maintainer="Platina local project <platina@example.invalid>"
+pkgname=device-xiaomi-platina
+pkgdesc="Xiaomi Mi 8 Lite - experimental headless server"
+pkgver=5
+pkgrel=31
+url="https://github.com/macosmojave2-alt/postmarket-mi8lite-platina"
+license="MIT"
+arch="aarch64"
+options="!check !archcheck"
+depends="
+    firmware-qcom-adreno-a530
+    firmware-xiaomi-platina
+    linux-firmware-qca
+    linux-postmarketos-qcom-sdm660
+    mkbootimg
+    msm-firmware-loader
+    postmarketos-base
+    chrony-openrc
+    pam-rundir
+    avahi
+    avahi-openrc
+    networkmanager-openrc
+    networkmanager-cli
+    networkmanager-wifi
+    wireless-regdb
+    dbus-openrc
+    postmarketos-usb-moded-openrc
+    postmarketos-usb-moded-default-profile-developer
+    tzdata
+    soc-qcom-sdm660
+    soc-qcom-sdm660-rproc
+"
+makedepends="devicepkg-dev"
+install="$pkgname.post-install"
+source="deviceinfo kernel-cmdline.conf modules-initfs disable-suspend.start gpu-firmware.files platina-networkmanager.conf platina-usb.nmconnection platina-usb-network.start platina-avahi.conf"
+build() {
+    devicepkg_build $startdir $pkgname
+}
+package() {
+    devicepkg_package $startdir $pkgname
+    install -Dm755 "$srcdir/disable-suspend.start" "$pkgdir/etc/local.d/disable-suspend.start"
+    install -Dm644 "$srcdir/gpu-firmware.files" "$pkgdir/usr/share/mkinitfs/files/00-platina-gpu-firmware.files"
+    install -Dm644 "$srcdir/platina-networkmanager.conf" "$pkgdir/etc/NetworkManager/conf.d/30-platina-wifi.conf"
+    install -Dm600 "$srcdir/platina-usb.nmconnection" "$pkgdir/etc/NetworkManager/system-connections/platina-usb.nmconnection"
+    install -Dm755 "$srcdir/platina-usb-network.start" "$pkgdir/etc/local.d/platina-usb-network.start"
+    install -Dm644 "$srcdir/platina-avahi.conf" "$pkgdir/usr/share/platina/avahi-daemon.conf"
+}
+sha512sums="
+c692b8c5935011955892071ab52b468c17ef186f21a5c2c7927453b2ae2ab8e80bb9d433c96a4e309a1bcec644c86adb9f0781c3fa02a39979d5880af464fb3d  deviceinfo
+3221917497d75c8ee6c151f2ed01a4dfdd3fe4e6a691b693b963bfb57fda9e1b482c50b77efa55a6dc4145ba08e9685e23482ddd488128983d79924f677f4eeb  kernel-cmdline.conf
+3901ca92054e15136091e5111feb5a33ca4fb7544020b9df421974409cab0d04989054c209215cb5e4a58da3ac142ebd47049fa75eb922ca6630e6b8297e0bad  modules-initfs
+53d9813f7537bc7d6f2ff7a623ed36c6f1243f3b66bbbc1ac2ebd55897a638e7867e447bea3b0353500d6b1a9a0142e18c1a708f3ff968f8970beedc1175279a  disable-suspend.start
+afc76d9275689bfa47065a14a2f9b0322576d5c269fa46663f4dab5b7299707450f4bbd7e0e6ea926b6afc7b73642dd33bed449d7c0999de53f48d2300d75f8c  gpu-firmware.files
+29dacca516ae2a0aea7e1c523131e120a13dca330af7f52b210971cf3613fe8a9267fd100499df8cf64478228f383c69f915092930468e2b3fb95271aa3512c2  platina-networkmanager.conf
+dd56237bcc3e6c3219310dca6358b8f2269e40534f2670b0fdef27d5db3dad7d7742a24b24b6478a5e12689c60ab9353abf1713e5af237c07d4617e15c47da12  platina-usb.nmconnection
+82272323ff6feb710f32ff34787cd85ccc189c6a8e77bed0de4dd0855f997939b1fd5952c6ab416be59e77a9f5b96bad67417737ae4361af9365d85f46ea29cc  platina-usb-network.start
+c620fb012b2b24ab25929952af2289caaaea6ac96a080b34b48e640c1d39c5662e1cd77bd26f89a864c127e514401243a41d6b7e53c8004c35cec045949f527f  platina-avahi.conf
+"

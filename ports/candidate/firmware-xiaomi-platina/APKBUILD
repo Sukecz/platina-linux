@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 Sukecz
+# This recipe is open source; the firmware it packages remains proprietary.
+maintainer="Sukecz <222629366+Sukecz@users.noreply.github.com>"
+pkgname=firmware-xiaomi-platina
+pkgver=2
+pkgrel=5
+pkgdesc="User-supplied Xiaomi Mi 8 Lite GPU, Wi-Fi and modem firmware"
+url="https://github.com/Sukecz/platina-linux"
+arch="aarch64"
+license="proprietary"
+options="!strip !check !archcheck !spdx !tracedeps pmb:cross-native"
+makedepends="qca-swiss-army-knife python3"
+source="
+    a512_zap.elf
+    gen-board-2.py
+    firmware-xiaomi-platina-bdwlan.tar.gz
+    firmware-xiaomi-platina-modem.tar.gz
+"
+builddir="$srcdir"
+
+build() {
+    ath10k-fwencoder --create \
+        --features=wowlan,no-nwifi-decap-4addr-padding,allows-mesh-bcast,mgmt-tx-by-ref,non-bmi,single-chan-info-per-channel \
+        --set-wmi-op-version=tlv --set-htt-op-version=tlv --set-fw-api=5
+    python3 "$srcdir/gen-board-2.py" "$srcdir/bdwlan" "$srcdir/bdwlan/board-2.json"
+    cd "$srcdir/bdwlan"
+    ath10k-bdencoder -c board-2.json -o "$srcdir/board-2.bin"
+}
+
+package() {
+    local wifi="$pkgdir/lib/firmware/ath10k/WCN3990/hw1.0"
+    local platform="$pkgdir/lib/firmware/postmarketos"
+    install -Dm644 "$srcdir/firmware-5.bin" "$wifi/firmware-5.bin"
+    install -Dm644 "$srcdir/board-2.bin" "$wifi/board-2.bin"
+    install -Dm644 "$srcdir/bdwlan/wlanmdsp.mbn" "$platform/wlanmdsp.mbn"
+    install -Dm644 "$srcdir/a512_zap.elf" "$platform/a512_zap.mbn"
+    install -dm755 "$platform"
+    install -m644 "$srcdir/modem/mba.mbn" "$srcdir/modem/modem.mdt" \
+        "$srcdir"/modem/modem.b* "$platform/"
+}
+sha512sums="
+44e003d5d75265fed5192d2dc384cf9b6867b5c2008cca1a50c8fc77f4b918df37d5f7c6bc63d0e9e9e4908eaf9c5250347e1edf08231c79eae0366942de70db  a512_zap.elf
+6c27a45c8322743ef231da3560a43cbd83fc7bf339af133a3ec2a082ab55d63e0c945652caae4f934307536d919a18fa2a91e5a4daa3698125ec9260ce81f70c  gen-board-2.py
+61d1dd7e3273b3327e0217e1c9fe418034e1c2c65b18c0e1ba71978799eb159723cc71407a236a3ac3185e1948a45d3d346983a47504abb211d28c8c6e249f69  firmware-xiaomi-platina-bdwlan.tar.gz
+2402fe62d1350e61d53d9f928c17ba0f6a7e4b76552946327067b01194945982935601812693e9567748fc7c8b67ef90b4ad49fee16533038e89acc9f26cc506  firmware-xiaomi-platina-modem.tar.gz
+"

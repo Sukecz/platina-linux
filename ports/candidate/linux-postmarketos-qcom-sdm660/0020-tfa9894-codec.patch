@@ -1,0 +1,323 @@
+From: pmOS Mi8Lite <macosmojave2@gmail.com>
+Subject: [PATCH] ASoC: codecs: add NXP TFA9894 direct-mode driver
+
+Minimal ASoC driver for the TFA9894 smart speaker amp on the Xiaomi Mi 8 Lite.
+Direct mode (I2S/TDM straight to the speaker, no CoolFlux DSP/container),
+verified live to pass audio. Register config RE'd from the vendor driver and
+captured from a working device.
+
+Signed-off-by: pmOS Mi8Lite <macosmojave2@gmail.com>
+---
+diff --git a/sound/soc/codecs/tfa9894.c b/sound/soc/codecs/tfa9894.c
+new file mode 100644
+--- /dev/null
++++ b/sound/soc/codecs/tfa9894.c
+@@ -0,0 +1,273 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * tfa9894.c - minimal ASoC driver for the NXP/Goodix TFA9894 smart speaker amp
++ *
++ * The TFA9894 is a "smart" mono Class-D amp with an on-chip CoolFlux DSP that
++ * Android drives with a proprietary firmware "container" (speaker model, boost,
++ * excursion protection). This driver deliberately does NOT use the DSP: it puts
++ * the amp in DIRECT mode (AMPINSEL = TDM), which is what the vendor driver does
++ * for the raw audio path, so I2S/TDM audio reaches the speaker without loading
++ * any firmware. Without the DSP there is no excursion/thermal protection, so
++ * keep the volume conservative.
++ *
++ * The register map and the per-revision "optimal settings" were reverse
++ * engineered from the vendor tfa98xx driver (tfa_init.c: tfa9894_specific) and
++ * verified against the chip on a Xiaomi Mi 8 Lite (revid 0x1a94, read live over
++ * i2c: reg 0x03 low byte = 0x94).
++ */
++
++#include <linux/bitfield.h>
++#include <linux/delay.h>
++#include <linux/i2c.h>
++#include <linux/module.h>
++#include <linux/regmap.h>
++#include <sound/soc.h>
++#include <sound/soc-dapm.h>
++
++/* registers (8-bit address, 16-bit big-endian values) */
++#define TFA9894_SYS_CTRL0	0x00
++#define  SYS_CTRL0_PWDN		BIT(0)	/* power down */
++#define  SYS_CTRL0_I2CR		BIT(1)	/* I2C reset (auto-clear) */
++#define  SYS_CTRL0_CFE		BIT(2)	/* enable CoolFlux DSP */
++#define  SYS_CTRL0_AMPE		BIT(3)	/* enable amplifier */
++#define  SYS_CTRL0_DCA		BIT(4)	/* enable DCDC boost */
++#define  SYS_CTRL0_SBSL		BIT(5)	/* DSP configured */
++#define  SYS_CTRL0_AMPC		BIT(6)	/* amplifier controlled by DSP */
++#define TFA9894_SYS_CTRL1	0x01
++#define  SYS_CTRL1_AMPINSEL	GENMASK(1, 0)	/* 0 = TDM direct to amp */
++#define  SYS_CTRL1_MANSCONF	BIT(2)	/* device I2C settings configured */
++#define TFA9894_AUDIO_CTRL	0x02
++#define  AUDIO_CTRL_AUDFS	GENMASK(3, 0)	/* audio sample rate */
++#define TFA9894_REVISION	0x03
++#define TFA9894_HIDE_KEY	0x0f
++#define TFA9894_TDM_CFG0	0x20
++#define  TDM_CFG0_TDME		BIT(0)	/* enable TDM interface */
++#define  TDM_CFG0_TDMSPKE	BIT(1)	/* audio channel to sink0 (speaker) */
++#define TFA9894_TDM_SLOT	0x23
++#define  TDM_SLOT_TDMSPKS	GENMASK(3, 0)	/* TDM slot for sink0 */
++#define TFA9894_KEY2		0xa0
++#define TFA9894_MTP_KEY		0xfb
++
++#define TFA9894_REV_ID		0x94	/* low byte of reg 0x03 */
++
++/*
++ * Cold-start register configuration for revid 0x1a94. This is the vendor
++ * "optimal settings" (RE'd from tfa9894_specific()) PLUS the clock/analog/TDM
++ * and speaker-protection registers captured live over i2c from a working
++ * Xiaomi Mi 8 Lite while audio was playing. In DIRECT mode (AMPINSEL = TDM,
++ * no DSP) these i2c registers are all the chip needs - the CoolFlux DSP RAM
++ * is not used. Verified live: flipping a fully-initialised chip to AMPINSEL=0
++ * kept audio playing, so this hardware path works without firmware.
++ * reg 0x00/0x01 (power + input mux) are handled in probe()/DAPM, not here.
++ */
++static const struct reg_sequence tfa9894_init_1a94[] = {
++	{ 0x00, 0xa211 },	/* direct mode: no DSP (AMPC/CFE=0), boost on, amp off */
++	{ 0x01, 0x15d4 },	/* AMPINSEL=0 (TDM straight to amp), MANSCONF=1 */
++	{ 0x02, 0x52c8 },	/* audio ctrl (AUDFS overwritten per-rate) */
++	{ 0x10, 0x785e },	/* system/clock control */
++	{ 0x11, 0x0006 },
++	{ 0x12, 0x004f },
++	{ 0x14, 0x0d49 },	/* PLL / analog */
++	{ 0x15, 0x029a },
++	{ 0x16, 0x0028 },
++	{ 0x17, 0x0118 },
++	{ 0x20, 0x0747 },	/* TDM interface config */
++	{ 0x21, 0x8110 },
++	{ 0x22, 0x3c0f },
++	{ 0x23, 0x0410 },	/* speaker sink on slot 0 */
++	{ 0x24, 0x0410 },
++	{ 0x52, 0xbe17 },	/* analog / current-sense / protection */
++	{ 0x53, 0x0dbe },
++	{ 0x54, 0x00e0 },
++	{ 0x55, 0x07ff },
++	{ 0x56, 0x05c3 },
++	{ 0x57, 0x0344 },
++	{ 0x58, 0x0081 },
++	{ 0x59, 0x0a9a },
++	{ 0x5a, 0x1040 },
++	{ 0x5b, 0x0a82 },
++	{ 0x5c, 0x00b0 },
++	{ 0x5d, 0x0790 },
++	{ 0x5e, 0x0005 },
++	{ 0x5f, 0x002a },
++	{ 0x61, 0x0032 },
++	{ 0x71, 0x00cf },
++	{ 0x72, 0x34a9 },
++	{ 0x73, 0x38c8 },
++	{ 0x76, 0x0067 },
++	{ 0x81, 0x5799 },
++	{ 0x82, 0x0104 },
++	{ 0x83, 0x0003 },
++	{ 0x88, 0x0004 },
++	{ 0x89, 0x0022 },
++	{ 0x8a, 0x1470 },
++};
++
++struct tfa9894 {
++	struct regmap *regmap;
++};
++
++static bool tfa9894_volatile_reg(struct device *dev, unsigned int reg)
++{
++	switch (reg) {
++	case TFA9894_SYS_CTRL0:		/* status bits auto-update */
++	case TFA9894_REVISION:
++	case TFA9894_MTP_KEY:
++		return true;
++	default:
++		return false;
++	}
++}
++
++static const struct regmap_config tfa9894_regmap = {
++	.reg_bits	= 8,
++	.val_bits	= 16,
++	.max_register	= 0xff,
++	.volatile_reg	= tfa9894_volatile_reg,
++	.cache_type	= REGCACHE_NONE,
++};
++
++/* map an ALSA rate to the AUDFS field value (matches vendor table) */
++static int tfa9894_audfs(unsigned int rate)
++{
++	switch (rate) {
++	case 8000:	return 0;
++	case 11025:	return 1;
++	case 12000:	return 2;
++	case 16000:	return 3;
++	case 22050:	return 4;
++	case 24000:	return 5;
++	case 32000:	return 6;
++	case 44100:	return 7;
++	case 48000:	return 8;
++	default:	return -EINVAL;
++	}
++}
++
++static int tfa9894_hw_params(struct snd_pcm_substream *substream,
++			     struct snd_pcm_hw_params *params,
++			     struct snd_soc_dai *dai)
++{
++	struct snd_soc_component *comp = dai->component;
++	int fs = tfa9894_audfs(params_rate(params));
++
++	if (fs < 0) {
++		dev_err(comp->dev, "unsupported rate %u\n", params_rate(params));
++		return fs;
++	}
++
++	return snd_soc_component_update_bits(comp, TFA9894_AUDIO_CTRL,
++					     AUDIO_CTRL_AUDFS,
++					     FIELD_PREP(AUDIO_CTRL_AUDFS, fs));
++}
++
++static const struct snd_soc_dai_ops tfa9894_dai_ops = {
++	.hw_params = tfa9894_hw_params,
++};
++
++static struct snd_soc_dai_driver tfa9894_dai = {
++	.name = "tfa9894-hifi",
++	.playback = {
++		.stream_name	= "HiFi Playback",
++		.formats	= SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S32_LE,
++		.rates		= SNDRV_PCM_RATE_8000_48000,
++		.rate_min	= 8000,
++		.rate_max	= 48000,
++		.channels_min	= 1,
++		.channels_max	= 2,
++	},
++	.ops = &tfa9894_dai_ops,
++};
++
++/*
++ * DAPM: the "OUT" -> AMPE -> POWER chain enables the amp when the stream runs.
++ * POWER clears PWDN (invert), AMPE sets the amp-enable bit; DCA (boost) rides
++ * along with AMPE via the supply. AMPC is left 0 so the amp follows AMPE
++ * directly instead of waiting for the (unused) DSP.
++ */
++static const struct snd_soc_dapm_widget tfa9894_widgets[] = {
++	SND_SOC_DAPM_AIF_IN("AIF IN", "HiFi Playback", 0, SND_SOC_NOPM, 0, 0),
++	SND_SOC_DAPM_SUPPLY("POWER", TFA9894_SYS_CTRL0, 0 /* PWDN */, 1, NULL, 0),
++	SND_SOC_DAPM_OUT_DRV("AMPE", TFA9894_SYS_CTRL0, 3 /* AMPE */, 0, NULL, 0),
++	SND_SOC_DAPM_OUTPUT("OUT"),
++};
++
++static const struct snd_soc_dapm_route tfa9894_routes[] = {
++	{ "AMPE", NULL, "AIF IN" },
++	{ "AMPE", NULL, "POWER" },
++	{ "OUT", NULL, "AMPE" },
++};
++
++static int tfa9894_probe(struct snd_soc_component *comp)
++{
++	struct tfa9894 *tfa = snd_soc_component_get_drvdata(comp);
++	unsigned int rev, key;
++	int ret;
++
++	ret = regmap_read(tfa->regmap, TFA9894_REVISION, &rev);
++	if (ret)
++		return ret;
++	if ((rev & 0xff) != TFA9894_REV_ID)
++		dev_warn(comp->dev, "unexpected revid %#x (want low byte %#x)\n",
++			 rev, TFA9894_REV_ID);
++
++	/* unlock protected registers (vendor tfa9894_specific sequence) */
++	regmap_write(tfa->regmap, TFA9894_HIDE_KEY, 0x5a6b);
++	regmap_read(tfa->regmap, TFA9894_MTP_KEY, &key);
++	regmap_write(tfa->regmap, TFA9894_KEY2, (key ^ 0x005a) & 0xffff);
++
++	/*
++	 * Apply the full cold-start config (direct/TDM mode, no DSP). After
++	 * this the chip is configured with the amp powered down; the DAPM
++	 * "POWER"/"AMPE" widgets clear PWDN and enable the amplifier when a
++	 * stream starts. TDM interface + speaker sink are set in the sequence.
++	 */
++	return regmap_multi_reg_write(tfa->regmap, tfa9894_init_1a94,
++				      ARRAY_SIZE(tfa9894_init_1a94));
++}
++
++static const struct snd_soc_component_driver tfa9894_component = {
++	.probe			= tfa9894_probe,
++	.dapm_widgets		= tfa9894_widgets,
++	.num_dapm_widgets	= ARRAY_SIZE(tfa9894_widgets),
++	.dapm_routes		= tfa9894_routes,
++	.num_dapm_routes	= ARRAY_SIZE(tfa9894_routes),
++	.idle_bias_on		= 1,
++	.endianness		= 1,
++};
++
++static int tfa9894_i2c_probe(struct i2c_client *i2c)
++{
++	struct tfa9894 *tfa;
++
++	tfa = devm_kzalloc(&i2c->dev, sizeof(*tfa), GFP_KERNEL);
++	if (!tfa)
++		return -ENOMEM;
++
++	tfa->regmap = devm_regmap_init_i2c(i2c, &tfa9894_regmap);
++	if (IS_ERR(tfa->regmap))
++		return PTR_ERR(tfa->regmap);
++
++	i2c_set_clientdata(i2c, tfa);
++
++	return devm_snd_soc_register_component(&i2c->dev, &tfa9894_component,
++					       &tfa9894_dai, 1);
++}
++
++static const struct of_device_id tfa9894_of_match[] = {
++	{ .compatible = "nxp,tfa9894" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, tfa9894_of_match);
++
++static struct i2c_driver tfa9894_i2c_driver = {
++	.driver = {
++		.name = "tfa9894",
++		.of_match_table = tfa9894_of_match,
++	},
++	.probe = tfa9894_i2c_probe,
++};
++module_i2c_driver(tfa9894_i2c_driver);
++
++MODULE_DESCRIPTION("ASoC NXP TFA9894 direct-mode driver");
++MODULE_LICENSE("GPL");
+--- a/sound/soc/codecs/Kconfig
++++ b/sound/soc/codecs/Kconfig
+@@ -2209,6 +2209,14 @@
+ 	  Note that the driver currently bypasses the built-in "CoolFlux DSP"
+ 	  and does not support (hardware) volume control.
+ 
++config SND_SOC_TFA9894
++	tristate "NXP/Goodix TFA9894 speaker amplifier (direct mode)"
++	depends on I2C
++	select REGMAP_I2C
++	help
++	  Enable support for the NXP/Goodix TFA9894 smart speaker amplifier in
++	  direct (DSP-bypass) mode, routing I2S/TDM straight to the speaker.
++
+ config SND_SOC_TLV320ADC3XXX
+ 	tristate "Texas Instruments TLV320ADC3001/3101 audio ADC"
+ 	depends on I2C
+--- a/sound/soc/codecs/Makefile
++++ b/sound/soc/codecs/Makefile
+@@ -324,6 +324,7 @@
+ snd-soc-tas2783-sdw-y := tas2783-sdw.o
+ snd-soc-tfa9879-y := tfa9879.o
+ snd-soc-tfa989x-y := tfa989x.o
++snd-soc-tfa9894-y := tfa9894.o
+ snd-soc-tlv320adc3xxx-y := tlv320adc3xxx.o
+ snd-soc-tlv320aic23-y := tlv320aic23.o
+ snd-soc-tlv320aic23-i2c-y := tlv320aic23-i2c.o
+@@ -758,6 +759,7 @@
+ obj-$(CONFIG_SND_SOC_TAS2770) += snd-soc-tas2770.o
+ obj-$(CONFIG_SND_SOC_TFA9879)	+= snd-soc-tfa9879.o
+ obj-$(CONFIG_SND_SOC_TFA989X)	+= snd-soc-tfa989x.o
++obj-$(CONFIG_SND_SOC_TFA9894)	+= snd-soc-tfa9894.o
+ obj-$(CONFIG_SND_SOC_TLV320ADC3XXX)	+= snd-soc-tlv320adc3xxx.o
+ obj-$(CONFIG_SND_SOC_TLV320AIC23)	+= snd-soc-tlv320aic23.o
+ obj-$(CONFIG_SND_SOC_TLV320AIC23_I2C)	+= snd-soc-tlv320aic23-i2c.o

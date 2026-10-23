@@ -1,0 +1,11 @@
+#!/bin/sh
+# Mi 8 Lite (platina): evita que el sistema entre en suspend y tumbe el USB/SSH.
+# Se ejecuta en cada arranque (local.d de OpenRC).
+if [ -w /sys/power/state ]; then
+	chmod 000 /sys/power/state 2>/dev/null
+fi
+# Desactivar autosuspend de todos los dispositivos USB por si acaso.
+for f in /sys/bus/usb/devices/*/power/control; do
+	[ -w "$f" ] && echo on > "$f" 2>/dev/null
+done
+exit 0

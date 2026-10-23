@@ -1,0 +1,5 @@
+#!/bin/sh
+# NetworkManager autoconnect also handles USB appearing after boot or reconnect.
+# Do not block boot when the cable is absent.
+nmcli --wait 0 connection up platina-usb >/dev/null 2>&1 || true
+exit 0

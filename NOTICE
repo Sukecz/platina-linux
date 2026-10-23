@@ -1,0 +1,56 @@
+Platina Linux — Xiaomi Mi 8 Lite / platina
+
+Original Platina integration code, documentation and artwork:
+Copyright (C) 2026 Sukecz and Platina contributors.
+Licensed GPL-2.0-only unless a file or the following notice specifies otherwise.
+The original Platina logo is supplied under the same project license; the name
+and logo do not imply endorsement by Xiaomi, Qualcomm, Alpine or postmarketOS.
+
+This repository contains an aggregate of independently licensed components.
+The top-level license does not relicense third-party source or firmware.
+
+Linux / SDM660 kernel changes and configuration
+- Linux contributors and the authors identified in patch headers/source files.
+- https://github.com/sdm660-mainline/linux
+- GPL-2.0-only for the kernel as a whole. Preserve per-file SPDX notices, including
+  GPL-2.0-or-later and compatible dual-license options where present.
+- Linux stable incremental patches originate from kernel.org.
+
+Community Xiaomi Mi 8 Lite port
+- Cesar Tamayo / macosmojave2-alt and credited patch authors.
+- https://github.com/macosmojave2-alt/postmarket-mi8lite-platina
+- Device package data declares MIT; kernel additions declare the applicable GPL
+  licenses. Original maintainer names, copyrights and patch notices are retained.
+- No assumption is made that the community repository has one blanket license.
+- Its firmware board-index helper is not redistributed: the public helper and
+  firmware packaging recipe were written for this repository.
+
+postmarketOS packaging / pmaports
+- postmarketOS contributors; package maintainers remain credited in APKBUILD.
+- https://gitlab.postmarketos.org/postmarketOS/pmaports
+- Packaging material inherited from pmaports retains GPLv3, subject to
+  explicit per-file/package-data notices. The kernel APKBUILD's license field
+  describes the resulting kernel package, not a relicensing of its build recipe.
+- GPLv3 packaging and GPLv2 kernel patches are independent works in an aggregate.
+
+Tianma panel reference
+- Xiaomi / The Linux Foundation / authors of MiCode platina-o-oss.
+- https://github.com/MiCode/Xiaomi_Kernel_OpenSource/tree/0bb2780bccb9c7e05f0edf5db8860e779179b5f9
+- GPL-2.0-only downstream panel data, with variant values recorded from matching
+  stock panel data. Exact reference hashes are in tianma-reference.json.
+
+External dependencies
+- pmbootstrap (GPLv3), the full kernel and distro packages are fetched
+  from pinned upstream sources during preparation/build. Their original notices
+  and distribution obligations remain applicable; their source trees are not
+  vendored here. Python/Pillow and other host tools keep their own licenses.
+
+Firmware
+- No GPU, Wi-Fi, modem or calibration binaries are included.
+- The firmware APK's license=proprietary describes user-supplied firmware payloads.
+  It does not restrict the GPL-2.0-only recipe/helper source written here.
+- No redistribution permission for those payloads is granted by this repository.
+
+License texts: LICENSE (GPLv2), LICENSES/GPL-3.0, LICENSES/MIT and
+LICENSES/BSD-2-Clause. Upstream copyright and license notices take precedence
+for inherited material. See docs/LICENSING.md for scope and source links.

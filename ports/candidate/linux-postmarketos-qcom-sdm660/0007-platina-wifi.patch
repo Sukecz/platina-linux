@@ -1,0 +1,45 @@
+From: pmOS Mi8Lite <macosmojave2@gmail.com>
+Subject: [PATCH] arm64: dts: qcom: sdm660-xiaomi-platina: enable modem + WCN3990 WiFi (direct supplies)
+
+Enable the modem (MSS) remoteproc and the WCN3990 WiFi.
+
+Power the WLAN block with the four rails the stock Android DT of this
+exact device uses (icnss node in the live-extracted DT):
+  vdd-cx-mx  -> LDO A5  (0.848 V)
+  vdd-1.8-xo -> LDO A9
+  vdd-1.3-rfa-> LDO A6
+  vdd-3.3-ch0-> LDO A19
+There is no ch1 rail (the chip reports num_rf_chains = 1, single chain)
+and Android drives the rails directly - there is no wcn3990-pmu power
+sequencer on this board. This mirrors sdm660-xiaomi-lavender, where WiFi
+scan/connect is known to work with the same SoC and firmware generation
+(WLAN.HL.1.0.1). A previous revision of this patch modeled a wcn3990-pmu
+node with a vddio rail, which does not match the platina hardware; with
+it the WLAN firmware crashed (err_qdi.c EX:wlan_process) as soon as a
+scan was started.
+
+Signed-off-by: pmOS Mi8Lite <macosmojave2@gmail.com>
+---
+--- a/arch/arm64/boot/dts/qcom/sdm660-xiaomi-platina.dts
++++ b/arch/arm64/boot/dts/qcom/sdm660-xiaomi-platina.dts
+@@ -913,3 +913,20 @@
+ &pm660_rradc {
+ 	status = "okay";
+ };
++
++&remoteproc_mss {
++	firmware-name = "postmarketos/mba.mbn", "postmarketos/modem.mdt";
++
++	status = "okay";
++};
++
++&wifi {
++	vdd-0.8-cx-mx-supply = <&vreg_l5a_0p848>;
++	vdd-1.8-xo-supply = <&vreg_l9a_1p8>;
++	vdd-1.3-rfa-supply = <&vreg_l6a_1p3>;
++	vdd-3.3-ch0-supply = <&vreg_l19a_3p3>;
++
++	qcom,calibration-variant = "xiaomi_platina";
++
++	status = "okay";
++};

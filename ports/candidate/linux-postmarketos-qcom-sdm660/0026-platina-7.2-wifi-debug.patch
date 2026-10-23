@@ -1,0 +1,56 @@
+--- a/drivers/net/wireless/ath/ath10k/wmi-tlv.c
++++ b/drivers/net/wireless/ath/ath10k/wmi-tlv.c
+@@ -16,6 +16,30 @@
+ #include "testmode.h"
+ #include "txrx.h"
+ #include <linux/bitfield.h>
++
++/* Debug knobs (Xiaomi platina, WLAN.HL.1.0.1.c6 scan crash bring-up):
++ * let the WMI scan command be altered at runtime through
++ * /sys/module/ath10k_core/parameters/ so firmware behavior can be
++ * bisected without rebuilding. Defaults keep mainline behavior.
++ * scan_flags_clr/set operate on scan_ctrl_flags AFTER the TLV
++ * FILTER_PROBE_REQ inversion: PASSIVE=0x1 BCAST_PROBE=0x2 CCK=0x4
++ * OFDM=0x8 CHAN_STAT=0x10 FILTER_PROBE=0x20 CONT_ON_ERR=0x80.
++ */
++static unsigned int ath10k_tlv_scan_flags_clr;
++module_param_named(scan_flags_clr, ath10k_tlv_scan_flags_clr, uint, 0644);
++MODULE_PARM_DESC(scan_flags_clr, "bits to clear in WMI scan_ctrl_flags");
++static unsigned int ath10k_tlv_scan_flags_set;
++module_param_named(scan_flags_set, ath10k_tlv_scan_flags_set, uint, 0644);
++MODULE_PARM_DESC(scan_flags_set, "bits to set in WMI scan_ctrl_flags");
++static unsigned int ath10k_tlv_scan_dwell_active;
++module_param_named(scan_dwell_active, ath10k_tlv_scan_dwell_active, uint, 0644);
++MODULE_PARM_DESC(scan_dwell_active, "override active dwell time ms (0=default)");
++static unsigned int ath10k_tlv_scan_dwell_passive;
++module_param_named(scan_dwell_passive, ath10k_tlv_scan_dwell_passive, uint, 0644);
++MODULE_PARM_DESC(scan_dwell_passive, "override passive dwell time ms (0=default)");
++static unsigned int ath10k_tlv_scan_num_probes = 3;
++module_param_named(scan_num_probes, ath10k_tlv_scan_num_probes, uint, 0644);
++MODULE_PARM_DESC(scan_num_probes, "num_probes in WMI start scan (default 3)");
+ 
+ /***************/
+ /* TLV helpers */
+@@ -2019,7 +2043,7 @@
+ 	cmd->num_ssids = __cpu_to_le32(arg->n_ssids);
+ 	cmd->num_bssids = __cpu_to_le32(arg->n_bssids);
+ 	cmd->ie_len = __cpu_to_le32(arg->ie_len);
+-	cmd->num_probes = __cpu_to_le32(3);
++	cmd->num_probes = __cpu_to_le32(ath10k_tlv_scan_num_probes);
+ 	ether_addr_copy(cmd->mac_addr.addr, arg->mac_addr.addr);
+ 	ether_addr_copy(cmd->mac_mask.addr, arg->mac_mask.addr);
+ 
+@@ -2027,6 +2051,13 @@
+ 	 * e.g. WMI-TLV inverts the logic behind the following flag.
+ 	 */
+ 	cmd->common.scan_ctrl_flags ^= __cpu_to_le32(WMI_SCAN_FILTER_PROBE_REQ);
++
++	cmd->common.scan_ctrl_flags &= __cpu_to_le32(~ath10k_tlv_scan_flags_clr);
++	cmd->common.scan_ctrl_flags |= __cpu_to_le32(ath10k_tlv_scan_flags_set);
++	if (ath10k_tlv_scan_dwell_active)
++		cmd->common.dwell_time_active = __cpu_to_le32(ath10k_tlv_scan_dwell_active);
++	if (ath10k_tlv_scan_dwell_passive)
++		cmd->common.dwell_time_passive = __cpu_to_le32(ath10k_tlv_scan_dwell_passive);
+ 
+ 	ptr += sizeof(*tlv);
+ 	ptr += sizeof(*cmd);

@@ -1,0 +1,30 @@
+From: pmOS Mi8Lite <macosmojave2@gmail.com>
+Subject: [PATCH] arm64: dts: qcom: sdm660: mux Secondary MI2S pins on platina
+
+The TFA9894 speaker is fed by Secondary MI2S; without muxing gpio24-27 to the
+sec_mi2s function the amp receives no bit clock and stays silent. Add the pin
+state and apply it via the sound card.
+
+Signed-off-by: pmOS Mi8Lite <macosmojave2@gmail.com>
+---
+--- a/arch/arm64/boot/dts/qcom/sdm660-xiaomi-platina.dts
++++ b/arch/arm64/boot/dts/qcom/sdm660-xiaomi-platina.dts
+@@ -1144,3 +1144,18 @@
+ 		};
+ 	};
+ };
++
++/* Secondary MI2S pins (SCK/WS/SD) to the TFA9894 speaker amp. Without this the
++ * amp gets no bit clock (NOCLK) and stays silent. */
++&tlmm {
++	sec_mi2s_default: sec-mi2s-default-state {
++		pins = "gpio24", "gpio25", "gpio26", "gpio27";
++		function = "sec_mi2s";
++		drive-strength = <8>;
++		bias-disable;
++	};
++};
++
++&sound {
++	pinctrl-0 = <&cdc_pdm_default>, <&cdc_dmic_default>, <&sec_mi2s_default>;
++};

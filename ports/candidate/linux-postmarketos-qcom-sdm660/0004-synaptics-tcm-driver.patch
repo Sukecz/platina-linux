@@ -1,0 +1,735 @@
+From: pmOS Mi8Lite <macosmojave2@gmail.com>
+Subject: [PATCH] input: touchscreen: add Synaptics TouchComm (TCM) I2C driver
+
+Mainline driver for Synaptics TouchComm (TCM) touch controllers (e.g. the Synaptics
+variant of the BOE TD4320 TDDI panel on the Xiaomi Mi 8 Lite). TCM uses a command/report
+message protocol over I2C and is not RMI4-compatible. The driver only enables the shared
+vdd rail (never disables it), retries the identify/app-info handshake, parses the variable
+touch report config for multitouch type B and reports BTN_TOUCH for single-touch clients.
+
+Signed-off-by: pmOS Mi8Lite <macosmojave2@gmail.com>
+--- /dev/null
++++ b/drivers/input/touchscreen/synaptics-tcm-i2c.c
+@@ -0,0 +1,691 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/*
++ * Synaptics TouchComm (TCM) I2C touchscreen driver.
++ *
++ * Minimal mainline driver for Synaptics TCM (TouchComm v1) touch controllers
++ * such as the one integrated with the BOE TD4320 TDDI panel on the Xiaomi
++ * Mi 8 Lite (platina). These controllers use a command/report message protocol
++ * over I2C and are NOT compatible with the RMI4 register interface.
++ *
++ * The controller runs application firmware from its own storage (it reports
++ * MODE_APPLICATION right after reset), so no host firmware download is needed.
++ *
++ * Protocol and touch report parsing are based on the downstream
++ * drivers/input/touchscreen/synaptics_tcm vendor driver.
++ *
++ * Copyright (c) 2026 pmOS Mi8Lite <macosmojave2@gmail.com>
++ */
++
++#include <linux/delay.h>
++#include <linux/gpio/consumer.h>
++#include <linux/i2c.h>
++#include <linux/input.h>
++#include <linux/input/mt.h>
++#include <linux/input/touchscreen.h>
++#include <linux/interrupt.h>
++#include <linux/module.h>
++#include <linux/regulator/consumer.h>
++#include <linux/unaligned.h>
++#include <drm/drm_panel.h>
++
++/* TCM message framing */
++#define TCM_MESSAGE_MARKER	0xa5
++#define TCM_MESSAGE_PADDING	0x5a
++#define TCM_HEADER_SIZE		4
++#define TCM_RD_BUF		256
++
++/* Commands (host -> device) */
++#define TCM_CMD_IDENTIFY		0x02
++#define TCM_CMD_RESET			0x04
++#define TCM_CMD_ENABLE_REPORT		0x05
++#define TCM_CMD_DISABLE_REPORT		0x06
++#define TCM_CMD_GET_APP_INFO		0x20
++#define TCM_CMD_GET_TOUCH_REPORT_CONFIG	0x25
++
++/* Status codes (device -> host, in response message header code field) */
++#define TCM_STATUS_OK			0x01
++#define TCM_STATUS_CONTINUED_READ	0x03
++
++/* Report codes (async, device -> host) */
++#define TCM_REPORT_IDENTIFY		0x10
++#define TCM_REPORT_TOUCH		0x11
++
++/* Touch report config opcodes (describe the touch report bitstream layout) */
++enum tcm_touch_report_code {
++	TOUCH_END = 0,
++	TOUCH_FOREACH_ACTIVE_OBJECT,
++	TOUCH_FOREACH_OBJECT,
++	TOUCH_FOREACH_END,
++	TOUCH_PAD_TO_NEXT_BYTE,
++	TOUCH_TIMESTAMP,
++	TOUCH_OBJECT_N_INDEX,
++	TOUCH_OBJECT_N_CLASSIFICATION,
++	TOUCH_OBJECT_N_X_POSITION,
++	TOUCH_OBJECT_N_Y_POSITION,
++	TOUCH_OBJECT_N_Z,
++	TOUCH_OBJECT_N_X_WIDTH,
++	TOUCH_OBJECT_N_Y_WIDTH,
++	TOUCH_OBJECT_N_TX_POSITION_TIXELS,
++	TOUCH_OBJECT_N_RX_POSITION_TIXELS,
++	TOUCH_0D_BUTTONS_STATE,
++	TOUCH_GESTURE_DOUBLE_TAP,
++	TOUCH_FRAME_RATE,
++	TOUCH_POWER_IM,
++	TOUCH_CID_IM,
++	TOUCH_RAIL_IM,
++	TOUCH_CID_VARIANCE_IM,
++	TOUCH_NSM_FREQUENCY,
++	TOUCH_NSM_STATE,
++	TOUCH_NUM_OF_ACTIVE_OBJECTS,
++	TOUCH_NUM_OF_CPU_CYCLES_USED_SINCE_LAST_FRAME,
++};
++
++/* object classification (status) values */
++#define TCM_OBJECT_NONE		0
++#define TCM_OBJECT_FINGER	1
++#define TCM_OBJECT_GLOVED_FINGER	2
++
++#define TCM_MAX_OBJECTS		10
++#define TCM_CONFIG_SIZE		256
++
++struct syna_tcm {
++	struct i2c_client *client;
++	struct input_dev *input;
++	struct touchscreen_properties prop;
++	struct gpio_desc *reset_gpio;
++	struct regulator *vdd;
++	bool powered;
++
++	struct drm_panel_follower panel_follower;
++	bool is_panel_follower;
++	bool enabled;
++
++	unsigned int max_x;
++	unsigned int max_y;
++	unsigned int max_objects;
++
++	u8 config[TCM_CONFIG_SIZE];
++	unsigned int config_len;
++
++	u8 rxbuf[TCM_RD_BUF];
++};
++
++/* ---- low level I2C message I/O ---- */
++
++/*
++ * Read a whole TCM message in a single I2C read. The controller pads any
++ * bytes beyond the message with TCM_MESSAGE_PADDING (0x5a), so reading a
++ * fixed oversized buffer is safe. On success *code/*payload_len describe the
++ * message and the payload starts at buf[TCM_HEADER_SIZE].
++ */
++static int syna_read_message(struct syna_tcm *ts, u8 *code,
++			     unsigned int *payload_len)
++{
++	struct i2c_client *client = ts->client;
++	struct i2c_msg msg = {
++		.addr = client->addr,
++		.flags = I2C_M_RD,
++		.len = TCM_RD_BUF,
++		.buf = ts->rxbuf,
++	};
++	int ret;
++
++	ret = i2c_transfer(client->adapter, &msg, 1);
++	if (ret != 1)
++		return ret < 0 ? ret : -EIO;
++
++	if (ts->rxbuf[0] != TCM_MESSAGE_MARKER)
++		return -EIO;
++
++	*code = ts->rxbuf[1];
++	*payload_len = get_unaligned_le16(&ts->rxbuf[2]);
++	if (*payload_len + TCM_HEADER_SIZE > TCM_RD_BUF)
++		*payload_len = TCM_RD_BUF - TCM_HEADER_SIZE;
++
++	return 0;
++}
++
++/* Write a command with optional payload. */
++static int syna_write_command(struct syna_tcm *ts, u8 cmd,
++			      const u8 *payload, u16 len)
++{
++	struct i2c_client *client = ts->client;
++	u8 buf[8];
++	struct i2c_msg msg = {
++		.addr = client->addr,
++		.flags = 0,
++		.buf = buf,
++	};
++	int ret;
++
++	if (len + 3 > sizeof(buf))
++		return -EINVAL;
++
++	buf[0] = cmd;
++	put_unaligned_le16(len, &buf[1]);
++	if (len)
++		memcpy(&buf[3], payload, len);
++	msg.len = 3 + len;
++
++	ret = i2c_transfer(client->adapter, &msg, 1);
++	return ret == 1 ? 0 : (ret < 0 ? ret : -EIO);
++}
++
++/*
++ * Send a command and wait (polling) for its response. Used during probe when
++ * the IRQ is not requested yet. Any async reports received while waiting are
++ * skipped. The response payload (if any) is copied into resp.
++ */
++static int syna_command(struct syna_tcm *ts, u8 cmd, const u8 *payload, u16 len,
++			u8 *resp, unsigned int resp_size, unsigned int *resp_len)
++{
++	unsigned int plen;
++	u8 code;
++	int ret, tries;
++
++	ret = syna_write_command(ts, cmd, payload, len);
++	if (ret)
++		return ret;
++
++	/* wait for the response message, skipping async reports */
++	for (tries = 0; tries < 50; tries++) {
++		usleep_range(2000, 3000);
++
++		ret = syna_read_message(ts, &code, &plen);
++		if (ret)
++			continue;
++
++		/* async reports have code >= REPORT_IDENTIFY; skip them */
++		if (code >= TCM_REPORT_IDENTIFY)
++			continue;
++
++		if (code != TCM_STATUS_OK)
++			return -EIO;
++
++		if (resp && resp_size) {
++			plen = min(plen, resp_size);
++			memcpy(resp, &ts->rxbuf[TCM_HEADER_SIZE], plen);
++			if (resp_len)
++				*resp_len = plen;
++		}
++		return 0;
++	}
++
++	return -ETIMEDOUT;
++}
++
++/* ---- touch report parsing ---- */
++
++/* Extract `bits` bits from the payload bitstream at `offset`. */
++static u32 syna_get_bits(const u8 *data, unsigned int data_len,
++			 unsigned int offset, unsigned int bits)
++{
++	u32 output = 0;
++	unsigned int remaining = bits;
++	unsigned int got = 0;
++
++	if (bits == 0 || bits > 32)
++		return 0;
++	if (offset + bits > data_len * 8)
++		return 0;
++
++	while (remaining) {
++		unsigned int byte_off = offset / 8;
++		unsigned int bit_off = offset % 8;
++		unsigned int avail = 8 - bit_off;
++		unsigned int take = min(avail, remaining);
++		u32 mask = 0xff >> (8 - take);
++		u32 val = (data[byte_off] >> bit_off) & mask;
++
++		output |= val << got;
++		got += take;
++		offset += take;
++		remaining -= take;
++	}
++
++	return output;
++}
++
++struct syna_object {
++	unsigned int status;
++	unsigned int x;
++	unsigned int y;
++};
++
++/*
++ * Parse a touch report payload according to the touch report config and emit
++ * MT type-B events. Mirrors the downstream config walker.
++ */
++static void syna_parse_touch(struct syna_tcm *ts, const u8 *data,
++			     unsigned int data_len)
++{
++	struct syna_object objs[TCM_MAX_OBJECTS] = {};
++	const u8 *cfg = ts->config;
++	unsigned int cfg_len = ts->config_len;
++	unsigned int offset = 0; /* bit offset in payload */
++	unsigned int idx = 0;	 /* index into config */
++	unsigned int obj = 0;
++	unsigned int active_objects = 0;
++	unsigned int num_active = 0;
++	bool have_num_active = false;
++	bool active_only = false;
++	unsigned int foreach_idx = 0;
++	unsigned int objects_done = 0;
++	int active_count = 0;
++	int i;
++
++	while (idx < cfg_len) {
++		u8 code = cfg[idx++];
++		unsigned int bits;
++
++		switch (code) {
++		case TOUCH_END:
++			goto report;
++		case TOUCH_FOREACH_ACTIVE_OBJECT:
++			foreach_idx = idx;
++			active_only = true;
++			obj = 0;
++			objects_done = 0;
++			break;
++		case TOUCH_FOREACH_OBJECT:
++			foreach_idx = idx;
++			active_only = false;
++			obj = 0;
++			objects_done = 0;
++			break;
++		case TOUCH_FOREACH_END:
++			objects_done++;
++			/*
++			 * The report packs only the objects it actually carries,
++			 * back to back. Loop over the per-object config again
++			 * only while the report still has data left (and we have
++			 * not hit the object / active-object limit). Without this
++			 * bound, iterating past the data would read zeroes and a
++			 * TOUCH_OBJECT_N_INDEX field would clobber object 0.
++			 */
++			if (objects_done < ts->max_objects &&
++			    offset < data_len * 8 &&
++			    (!have_num_active || objects_done < num_active)) {
++				idx = foreach_idx;
++				obj++;
++			}
++			break;
++		case TOUCH_PAD_TO_NEXT_BYTE:
++			offset = ALIGN(offset, 8);
++			break;
++		case TOUCH_TIMESTAMP:
++			bits = cfg[idx++];
++			offset += bits;
++			break;
++		case TOUCH_OBJECT_N_INDEX:
++			bits = cfg[idx++];
++			obj = syna_get_bits(data, data_len, offset, bits);
++			offset += bits;
++			break;
++		case TOUCH_OBJECT_N_CLASSIFICATION:
++			bits = cfg[idx++];
++			if (obj < TCM_MAX_OBJECTS)
++				objs[obj].status =
++					syna_get_bits(data, data_len, offset, bits);
++			offset += bits;
++			break;
++		case TOUCH_OBJECT_N_X_POSITION:
++			bits = cfg[idx++];
++			if (obj < TCM_MAX_OBJECTS)
++				objs[obj].x =
++					syna_get_bits(data, data_len, offset, bits);
++			offset += bits;
++			break;
++		case TOUCH_OBJECT_N_Y_POSITION:
++			bits = cfg[idx++];
++			if (obj < TCM_MAX_OBJECTS)
++				objs[obj].y =
++					syna_get_bits(data, data_len, offset, bits);
++			offset += bits;
++			break;
++		case TOUCH_NUM_OF_ACTIVE_OBJECTS:
++			bits = cfg[idx++];
++			num_active = syna_get_bits(data, data_len, offset, bits);
++			have_num_active = true;
++			if (num_active > ts->max_objects)
++				num_active = ts->max_objects;
++			active_objects = num_active;
++			offset += bits;
++			break;
++		/* fields we read past but don't use */
++		case TOUCH_OBJECT_N_Z:
++		case TOUCH_OBJECT_N_X_WIDTH:
++		case TOUCH_OBJECT_N_Y_WIDTH:
++		case TOUCH_OBJECT_N_TX_POSITION_TIXELS:
++		case TOUCH_OBJECT_N_RX_POSITION_TIXELS:
++		case TOUCH_0D_BUTTONS_STATE:
++		case TOUCH_GESTURE_DOUBLE_TAP:
++		case TOUCH_FRAME_RATE:
++		case TOUCH_POWER_IM:
++		case TOUCH_CID_IM:
++		case TOUCH_RAIL_IM:
++		case TOUCH_CID_VARIANCE_IM:
++		case TOUCH_NSM_FREQUENCY:
++		case TOUCH_NSM_STATE:
++		case TOUCH_NUM_OF_CPU_CYCLES_USED_SINCE_LAST_FRAME:
++			bits = cfg[idx++];
++			offset += bits;
++			break;
++		default:
++			/* unknown opcode followed by a bit count */
++			bits = cfg[idx++];
++			offset += bits;
++			break;
++		}
++	}
++
++report:
++	(void)active_objects;
++	for (i = 0; i < ts->max_objects && i < TCM_MAX_OBJECTS; i++) {
++		bool active = objs[i].status == TCM_OBJECT_FINGER ||
++			      objs[i].status == TCM_OBJECT_GLOVED_FINGER;
++
++		input_mt_slot(ts->input, i);
++		input_mt_report_slot_state(ts->input, MT_TOOL_FINGER, active);
++		if (active) {
++			active_count++;
++			touchscreen_report_pos(ts->input, &ts->prop,
++					       objs[i].x, objs[i].y, true);
++		}
++	}
++	/* single-touch emulation for clients that rely on BTN_TOUCH */
++	input_report_key(ts->input, BTN_TOUCH, active_count > 0);
++	input_mt_sync_frame(ts->input);
++	input_sync(ts->input);
++}
++
++/* ---- IRQ ---- */
++
++static irqreturn_t syna_irq(int irq, void *dev_id)
++{
++	struct syna_tcm *ts = dev_id;
++	unsigned int plen;
++	u8 code;
++
++	if (syna_read_message(ts, &code, &plen))
++		return IRQ_HANDLED;
++
++	if (code == TCM_REPORT_TOUCH)
++		syna_parse_touch(ts, &ts->rxbuf[TCM_HEADER_SIZE], plen);
++
++	return IRQ_HANDLED;
++}
++
++/* ---- power / reset ---- */
++
++static int syna_power_on(struct syna_tcm *ts)
++{
++	int ret;
++
++	/*
++	 * Enable our digital rail. This rail (and the analog LCDB rail) is
++	 * shared with the TDDI panel, so we only ever turn it ON and never
++	 * disable it: powering it down would kill the panel. The analog supply
++	 * is left to the bootloader/panel (always on), we do not manage it.
++	 */
++	if (!ts->powered) {
++		ret = regulator_enable(ts->vdd);
++		if (ret)
++			return ret;
++		ts->powered = true;
++	}
++
++	/* the bootloader leaves the panel/touch rails on; give it a moment */
++	msleep(20);
++
++	if (ts->reset_gpio) {
++		gpiod_set_value_cansleep(ts->reset_gpio, 1);
++		usleep_range(1000, 2000);
++		gpiod_set_value_cansleep(ts->reset_gpio, 0);
++		/* controller needs ~200ms to boot into application firmware */
++		msleep(200);
++	}
++
++	return 0;
++}
++
++/*
++ * We deliberately never power the controller down: its rails are shared with
++ * the always-on TDDI panel. The most we do on stop is assert the touch-only
++ * reset GPIO (tlmm66), which does not affect the panel.
++ */
++static void syna_power_off(struct syna_tcm *ts)
++{
++	if (ts->reset_gpio)
++		gpiod_set_value_cansleep(ts->reset_gpio, 1);
++}
++
++/* ---- controller setup (query info + config, enable reports) ---- */
++
++static int syna_setup(struct syna_tcm *ts)
++{
++	struct device *dev = &ts->client->dev;
++	u8 app_info[64];
++	unsigned int len;
++	u8 code, rep;
++	unsigned int plen;
++	int ret, tries, attempt;
++
++	/*
++	 * The controller may not answer immediately after an independent probe
++	 * (the shared TDDI rails take time to settle). Retry the identify +
++	 * app-info handshake for a few seconds before giving up.
++	 */
++	for (attempt = 0; ; attempt++) {
++		/* drain the identify report the controller sends after reset */
++		for (tries = 0; tries < 20; tries++) {
++			usleep_range(2000, 3000);
++			if (!syna_read_message(ts, &code, &plen) &&
++			    code == TCM_REPORT_IDENTIFY)
++				break;
++		}
++
++		ret = syna_command(ts, TCM_CMD_GET_APP_INFO, NULL, 0,
++				   app_info, sizeof(app_info), &len);
++		if (!ret && len >= 38)
++			break;
++
++		if (attempt >= 20)
++			return dev_err_probe(dev, ret ? ret : -EIO,
++					     "controller not responding (app info)\n");
++		msleep(100);
++	}
++
++	/* app_info layout (struct syna_tcm_app_info): max_x/max_y/max_objects
++	 * are 16-bit LE at offsets 32/34/36 (after the 16-byte
++	 * customer_config_id at offset 16).
++	 */
++	ts->max_x = get_unaligned_le16(&app_info[32]);
++	ts->max_y = get_unaligned_le16(&app_info[34]);
++	ts->max_objects = get_unaligned_le16(&app_info[36]);
++
++	if (!ts->max_x || !ts->max_y ||
++	    ts->max_objects == 0 || ts->max_objects > TCM_MAX_OBJECTS) {
++		dev_warn(dev, "implausible app info x=%u y=%u obj=%u, using defaults\n",
++			 ts->max_x, ts->max_y, ts->max_objects);
++		ts->max_x = 1080;
++		ts->max_y = 2280;
++		ts->max_objects = TCM_MAX_OBJECTS;
++	}
++
++	ret = syna_command(ts, TCM_CMD_GET_TOUCH_REPORT_CONFIG, NULL, 0,
++			   ts->config, sizeof(ts->config), &ts->config_len);
++	if (ret)
++		return dev_err_probe(dev, ret, "failed to get report config\n");
++
++	/* enable touch reports */
++	rep = TCM_REPORT_TOUCH;
++	ret = syna_command(ts, TCM_CMD_ENABLE_REPORT, &rep, 1, NULL, 0, NULL);
++	if (ret)
++		return dev_err_probe(dev, ret, "failed to enable touch report\n");
++
++	dev_info(dev, "Synaptics TCM touch %ux%u, %u objects\n",
++		 ts->max_x, ts->max_y, ts->max_objects);
++	return 0;
++}
++
++static int syna_start(struct syna_tcm *ts)
++{
++	int ret;
++
++	ret = syna_power_on(ts);
++	if (ret)
++		return ret;
++
++	ret = syna_setup(ts);
++	if (ret) {
++		syna_power_off(ts);
++		return ret;
++	}
++
++	enable_irq(ts->client->irq);
++	ts->enabled = true;
++	return 0;
++}
++
++static void syna_stop(struct syna_tcm *ts)
++{
++	disable_irq(ts->client->irq);
++	ts->enabled = false;
++	syna_power_off(ts);
++}
++
++/* ---- drm panel follower (power-sync with the TDDI panel) ---- */
++
++static int syna_panel_prepared(struct drm_panel_follower *follower)
++{
++	struct syna_tcm *ts = container_of(follower, struct syna_tcm,
++					   panel_follower);
++
++	return syna_start(ts);
++}
++
++static int syna_panel_unpreparing(struct drm_panel_follower *follower)
++{
++	struct syna_tcm *ts = container_of(follower, struct syna_tcm,
++					   panel_follower);
++
++	if (ts->enabled)
++		syna_stop(ts);
++	return 0;
++}
++
++static const struct drm_panel_follower_funcs syna_follower_funcs = {
++	.panel_prepared = syna_panel_prepared,
++	.panel_unpreparing = syna_panel_unpreparing,
++};
++
++/* ---- probe ---- */
++
++static int syna_probe(struct i2c_client *client)
++{
++	struct device *dev = &client->dev;
++	struct syna_tcm *ts;
++	int ret;
++
++	ts = devm_kzalloc(dev, sizeof(*ts), GFP_KERNEL);
++	if (!ts)
++		return -ENOMEM;
++
++	ts->client = client;
++	i2c_set_clientdata(client, ts);
++
++	/*
++	 * Only the digital rail is managed here. The analog supply is the panel
++	 * LCDB rail, left on by the bootloader; we must not touch it. The vdd
++	 * rail is shared with the panel iovcc, so we only turn it on (never off).
++	 */
++	ts->vdd = devm_regulator_get(dev, "vdd");
++	if (IS_ERR(ts->vdd))
++		return dev_err_probe(dev, PTR_ERR(ts->vdd),
++				     "failed to get vdd regulator\n");
++
++	ts->reset_gpio = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
++	if (IS_ERR(ts->reset_gpio))
++		return dev_err_probe(dev, PTR_ERR(ts->reset_gpio),
++				     "failed to get reset gpio\n");
++
++	/* default geometry; refined from app info in syna_setup() */
++	ts->max_x = 1080;
++	ts->max_y = 2280;
++	ts->max_objects = TCM_MAX_OBJECTS;
++
++	ts->input = devm_input_allocate_device(dev);
++	if (!ts->input)
++		return -ENOMEM;
++
++	ts->input->name = "Synaptics TCM Touchscreen";
++	ts->input->id.bustype = BUS_I2C;
++
++	input_set_capability(ts->input, EV_KEY, BTN_TOUCH);
++	input_set_abs_params(ts->input, ABS_MT_POSITION_X, 0, ts->max_x, 0, 0);
++	input_set_abs_params(ts->input, ABS_MT_POSITION_Y, 0, ts->max_y, 0, 0);
++	touchscreen_parse_properties(ts->input, true, &ts->prop);
++
++	ret = input_mt_init_slots(ts->input, TCM_MAX_OBJECTS,
++				  INPUT_MT_DIRECT | INPUT_MT_DROP_UNUSED);
++	if (ret)
++		return dev_err_probe(dev, ret, "failed to init MT slots\n");
++
++	ret = devm_request_threaded_irq(dev, client->irq, NULL, syna_irq,
++					IRQF_ONESHOT | IRQF_NO_AUTOEN,
++					"synaptics-tcm", ts);
++	if (ret)
++		return dev_err_probe(dev, ret, "failed to request irq\n");
++
++	/* register input before the controller can raise IRQs */
++	ret = input_register_device(ts->input);
++	if (ret)
++		return dev_err_probe(dev, ret, "failed to register input\n");
++
++	/*
++	 * If the touch node references the panel (panel = <&panel>), follow the
++	 * panel's power state so we power on in sync with the TDDI display.
++	 * Otherwise bring the controller up immediately.
++	 */
++	if (drm_is_panel_follower(dev)) {
++		ts->is_panel_follower = true;
++		ts->panel_follower.funcs = &syna_follower_funcs;
++		ret = devm_drm_panel_add_follower(dev, &ts->panel_follower);
++		if (ret)
++			return dev_err_probe(dev, ret,
++					     "failed to add panel follower\n");
++	} else {
++		ret = syna_start(ts);
++		if (ret)
++			return ret;
++	}
++
++	return 0;
++}
++
++static const struct of_device_id syna_of_match[] = {
++	{ .compatible = "syna,tcm-i2c" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, syna_of_match);
++
++static const struct i2c_device_id syna_id[] = {
++	{ "synaptics-tcm-i2c" },
++	{ }
++};
++MODULE_DEVICE_TABLE(i2c, syna_id);
++
++static struct i2c_driver syna_driver = {
++	.driver = {
++		.name = "synaptics-tcm-i2c",
++		.of_match_table = syna_of_match,
++	},
++	.probe = syna_probe,
++	.id_table = syna_id,
++};
++module_i2c_driver(syna_driver);
++
++MODULE_DESCRIPTION("Synaptics TouchComm (TCM) I2C touchscreen driver");
++MODULE_AUTHOR("pmOS Mi8Lite <macosmojave2@gmail.com>");
++MODULE_LICENSE("GPL");
+--- a/drivers/input/touchscreen/Kconfig
++++ b/drivers/input/touchscreen/Kconfig
+@@ -1309,6 +1309,18 @@
+ 	  To compile this driver as a module, choose M here: the
+ 	  module will be called surface3_spi.
+ 
++config TOUCHSCREEN_SYNAPTICS_TCM
++	tristate "Synaptics TouchComm (TCM) I2C touchscreen"
++	depends on I2C
++	help
++	  Say Y here if you have a Synaptics TouchComm (TCM) touch controller,
++	  such as the one integrated with the BOE TD4320 TDDI panel on the
++	  Xiaomi Mi 8 Lite (platina). These controllers use a command/report
++	  message protocol and are not compatible with RMI4.
++
++	  To compile this driver as a module, choose M here: the module will be
++	  called synaptics-tcm-i2c.
++
+ config TOUCHSCREEN_SX8654
+ 	tristate "Semtech SX8654 touchscreen"
+ 	depends on I2C
+--- a/drivers/input/touchscreen/Makefile
++++ b/drivers/input/touchscreen/Makefile
+@@ -109,6 +109,7 @@
+ wm97xx-ts-$(CONFIG_TOUCHSCREEN_WM9712)	+= wm9712.o
+ wm97xx-ts-$(CONFIG_TOUCHSCREEN_WM9713)	+= wm9713.o
+ obj-$(CONFIG_TOUCHSCREEN_WM97XX_MAINSTONE)	+= mainstone-wm97xx.o
++obj-$(CONFIG_TOUCHSCREEN_SYNAPTICS_TCM)	+= synaptics-tcm-i2c.o
+ obj-$(CONFIG_TOUCHSCREEN_SX8654)	+= sx8654.o
+ obj-$(CONFIG_TOUCHSCREEN_TPS6507X)	+= tps6507x-ts.o
+ obj-$(CONFIG_TOUCHSCREEN_ZET6223)	+= zet6223.o

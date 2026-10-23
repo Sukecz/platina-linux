@@ -1,0 +1,352 @@
+From: pmOS Mi8Lite <macosmojave2@gmail.com>
+Subject: [PATCH] clk: qcom: add SDM660 CPRh CPU voltage bring-up driver
+
+Programs the CPRh (CPR hardened) controllers into full HW closed-loop so the
+OSM can perform its voltage handshake and raise CPU frequency. Conservative
+first cut: all corners clamped at/below the NOM fuse point (no over-volt).
+
+Signed-off-by: pmOS Mi8Lite <macosmojave2@gmail.com>
+---
+diff --git a/drivers/clk/qcom/clk-cprh-sdm660.c b/drivers/clk/qcom/clk-cprh-sdm660.c
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/drivers/clk/qcom/clk-cprh-sdm660.c
+@@ -0,0 +1,310 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * SDM660 CPRh (CPR hardened) minimal bring-up for mainline Linux.
++ *
++ * The SDM660 CPU clusters get their supply voltage from the CPRh hardware in
++ * "full HW closed-loop" mode. The OSM (cpufreq) cannot raise CPU frequency
++ * until the CPRh is programmed and running, because each OSM frequency
++ * transition performs a voltage handshake with the CPRh. Mainline has no CPRh
++ * driver for SDM660, which is why cpufreq is missing.
++ *
++ * This is a distilled port of the downstream cpr3-regulator + cprh-kbss
++ * drivers, reduced to the one-time hardware setup needed for full HW
++ * closed-loop operation. It uses per-device "golden" fuse-derived values
++ * captured from the downstream kernel (see cprh-golden-platina.md) so it does
++ * not re-implement the fuse read / interpolation math.
++ *
++ * WARNING: this programs the CPU voltage rail. Wrong values can under-volt
++ * (hang) or over-volt (hardware damage). The values below are the fuse-derived
++ * open-loop voltages + CPR target quotients read out of this exact device.
++ *
++ * Status: complete for a conservative first bring-up, UNTESTED on hardware.
++ * The full HW closed-loop init sequence is implemented; all corners are clamped
++ * at/below the NOM fuse point so the worst case is under-volt, never over-volt
++ * (see the corner tables). To use it:
++ *   1. add a DT node:
++ *        cprh: cpr@179c8000 {
++ *            compatible = "qcom,sdm660-cprh";
++ *            reg = <0 0x179c8000 0 0x4000>, <0 0x179c4000 0 0x4000>;
++ *            clocks = <&gcc GCC_HMSS_RBCPR_CLK>;
++ *            clock-names = "core_clk";
++ *        };
++ *      (this driver ioremaps the two controller bases from hard-coded phys for
++ *       now; a cleaner version would take them from reg.)
++ *   2. cap the OSM OPP table to <= NOM (<=1401 MHz pwrcl / the perfcl NOM freq)
++ *      so the OSM never signals a corner above the clamped voltages.
++ *   3. verify the OSM<->CPRh corner index (0- vs 1-based) before extending the
++ *      corner table upward or removing the clamp.
++ * Later work: real per-frequency interpolation of corners 1/6/7, TURBO corners
++ * with the APM switch above 872 mV, sensor-ownership programming, and exposing
++ * the controllers as proper regulators.
++ */
++
++#include <linux/clk.h>
++#include <linux/delay.h>
++#include <linux/io.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++
++/* --- CPRh controller register offsets (from cpr_ctrl base) --- */
++#define CPR3_REG_CPR_CTL		0x4
++#define CPR3_CPR_CTL_LOOP_EN		BIT(0)
++#define CPR3_REG_CPR_STEP_QUOT		0x14
++#define CPR3_REG_GCNT(ro)		(0xA0 + 0x4 * (ro))
++#define CPR3_REG_THRESH(thr)		(0x808 + 0x440 * (thr))
++#define CPR3_REG_RO_MASK(thr)		(0x80C + 0x440 * (thr))
++#define CPR3_RO_MASK_ALL		GENMASK(15, 0)	/* CPR3_RO_COUNT=16 */
++#define CPR4_REG_MARGIN_ADJ_CTL		0x7F8
++#define CPR4_MARGIN_ADJ_CTL_HW_CL_EN	BIT(4)
++#define CPR3_REG_CPR_TIMER_MID_CONT	0x3004
++#define CPRH_REG_CORNER(n)		(0x3A00 + 0x4 * (n))
++#define CPRH_REG_CTL			0x3AA0
++#define CPRH_CTL_OSM_ENABLED		BIT(0)	/* OSM<->CPR interface enable */
++
++/* CPR_CTL fields */
++#define CPR_CTL_IDLE_CLOCKS_SHIFT	1
++#define CPR_CTL_COUNT_MODE_SHIFT	6
++#define CPR_CTL_COUNT_REPEAT_SHIFT	9
++
++/* THRESH fields (per thread) */
++#define THRESH_CONS_DOWN_SHIFT		0
++#define THRESH_CONS_UP_SHIFT		4
++#define THRESH_DOWN_THRESH_SHIFT	8
++#define THRESH_UP_THRESH_SHIFT		13
++
++/* CPRH corner word fields */
++#define CORNER_INIT_VOLT_SHIFT		0
++#define CORNER_FLOOR_VOLT_SHIFT		8
++#define CORNER_QUOT_DELTA_SHIFT		16
++#define CORNER_RO_SEL_SHIFT		25
++
++/* CPRH_REG_CTL fields */
++#define CTL_BASE_VOLTAGE_SHIFT		1
++#define CTL_VOLTAGE_MULTIPLIER_SHIFT	25
++
++/* thread THRESH config (apc0/apc1 thread@0): cons_up0 cons_down2 up2 down2 */
++#define THRESH_CONS_UP			0
++#define THRESH_CONS_DOWN		2
++#define THRESH_UP_THRESHOLD		2
++#define THRESH_DOWN_THRESHOLD		2
++
++/* constants from cprh-kbss / DT */
++#define CPR_CLOCK_RATE			19200000	/* RBCPR core clk */
++#define SENSOR_TIME_NS			1000
++#define LOOP_TIME_NS			5000000
++#define IDLE_CLOCKS			15
++#define COUNT_MODE			0		/* all at once */
++#define COUNT_REPEAT			14
++#define STEP_QUOT_INIT_MIN		12
++#define STEP_QUOT_INIT_MAX		14
++#define VOLTAGE_BASE_UV			400000
++#define VOLTAGE_STEP_UV			4000
++#define DELTA_QUOT_STEP_FACTOR		4
++#define RO_SEL				7
++
++/*
++ * Full 8-corner tables (platina, speed bin 1). The controllers have 8 corners,
++ * one per OSM frequency; the corner the OSM signals indexes CPRH_REG_CORNER(n).
++ *
++ * Values are the fuse-derived golden open-loop voltages + CPR target quotients
++ * captured from the downstream kernel (see cprh-golden-platina.md), with floors
++ * from qcom,cpr-voltage-floor. corner-fmax-map places the fuse points at the
++ * corners marked below; corners between/around them would normally be linearly
++ * interpolated by frequency.
++ *
++ * SAFETY-FIRST first cut: instead of interpolating (and instead of relying on
++ * the exact 0-/1-based OSM<->CPRh corner index, which we cannot validate live),
++ * every corner is clamped at or below the NOM fuse point (<=758 mV pwrcl /
++ * <=788 mV perfcl, all well under the 872 mV APM threshold). Consequence: if
++ * the OSM ever requests a high corner, or if the index is off by one, the worst
++ * case is a mild UNDER-volt (recoverable hang) - never an over-volt. The OSM
++ * OPP table must be capped to <=NOM to match; higher corners are a later step
++ * once real interpolation + index verification are done.
++ */
++struct cprh_corner {
++	u32 open_loop_uv;
++	u32 floor_uv;
++	u32 target_quot;	/* RO7 */
++};
++
++struct cprh_ctrl_cfg {
++	const char *name;
++	u32 phys;		/* cpr_ctrl base */
++	const struct cprh_corner *corners;
++	int corner_count;
++};
++
++/* pwrcl / little: fmax-map <2 3 4 5 8> = LowSVS SVS SVSPLUS NOM TURBO_L1 */
++static const struct cprh_corner apc0_corners[8] = {
++	{ 614000, 588000, 336 },	/* c0  OSM1  LowSVS   */
++	{ 614000, 588000, 336 },	/* c1  OSM2  LowSVS   */
++	{ 644000, 588000, 390 },	/* c2  OSM3  SVS      */
++	{ 688000, 596000, 461 },	/* c3  OSM4  SVSPLUS  */
++	{ 758000, 652000, 586 },	/* c4  OSM5  NOM      */
++	{ 758000, 652000, 586 },	/* c5  clamp NOM      */
++	{ 758000, 652000, 586 },	/* c6  clamp NOM      */
++	{ 758000, 652000, 586 },	/* c7  clamp NOM      */
++};
++
++/* perfcl / big: fmax-map <2 3 4 6 7> = SVS SVSPLUS NOM TURBO TURBO_L2 */
++static const struct cprh_corner apc1_corners[8] = {
++	{ 684000, 588000, 575 },	/* c0  OSM1  SVS      */
++	{ 684000, 588000, 575 },	/* c1  OSM2  SVS      */
++	{ 718000, 596000, 642 },	/* c2  OSM3  SVSPLUS  */
++	{ 788000, 652000, 794 },	/* c3  OSM4  NOM      */
++	{ 788000, 652000, 794 },	/* c4  clamp NOM      */
++	{ 788000, 652000, 794 },	/* c5  clamp NOM      */
++	{ 788000, 652000, 794 },	/* c6  clamp NOM      */
++	{ 788000, 652000, 794 },	/* c7  clamp NOM      */
++};
++
++static const struct cprh_ctrl_cfg ctrl_cfgs[] = {
++	{ "apc0", 0x179c8000, apc0_corners, ARRAY_SIZE(apc0_corners) },
++	{ "apc1", 0x179c4000, apc1_corners, ARRAY_SIZE(apc1_corners) },
++};
++
++#define DIV_RUP(a, b)	(((a) + (b) - 1) / (b))
++
++static u32 corner_word(const struct cprh_corner *c, u32 base_quot)
++{
++	u32 iv = DIV_RUP(c->open_loop_uv - VOLTAGE_BASE_UV, VOLTAGE_STEP_UV);
++	u32 fv = DIV_RUP(c->floor_uv - VOLTAGE_BASE_UV, VOLTAGE_STEP_UV);
++	u32 dq = c->target_quot ?
++		 DIV_RUP(c->target_quot - base_quot, DELTA_QUOT_STEP_FACTOR) : 0;
++
++	return ((iv & 0xff) << CORNER_INIT_VOLT_SHIFT) |
++	       ((fv & 0xff) << CORNER_FLOOR_VOLT_SHIFT) |
++	       ((dq & 0x1ff) << CORNER_QUOT_DELTA_SHIFT) |
++	       ((RO_SEL & 0xf) << CORNER_RO_SEL_SHIFT);
++}
++
++static u32 calc_gcnt(void)
++{
++	u64 t = (u64)CPR_CLOCK_RATE * SENSOR_TIME_NS;
++
++	return DIV_RUP(t, 1000000000ULL) - 1;
++}
++
++static void cprh_program(void __iomem *base, const struct cprh_ctrl_cfg *cfg)
++{
++	u32 base_quot = U32_MAX, gcnt, val;
++	u64 tmp;
++	int i;
++
++	for (i = 0; i < cfg->corner_count; i++)
++		base_quot = min(base_quot, cfg->corners[i].target_quot);
++
++	/* GCNT for the RO in use */
++	gcnt = calc_gcnt();
++	writel_relaxed(gcnt, base + CPR3_REG_GCNT(RO_SEL));
++
++	/* loop-delay timer (HW closed-loop) */
++	tmp = (u64)CPR_CLOCK_RATE * LOOP_TIME_NS;
++	do_div(tmp, 1000000000ULL);
++	writel_relaxed((u32)tmp, base + CPR3_REG_CPR_TIMER_MID_CONT);
++
++	/* CPR sensor control (loop_en left off until the very end) */
++	val = (IDLE_CLOCKS << CPR_CTL_IDLE_CLOCKS_SHIFT) |
++	      (COUNT_MODE << CPR_CTL_COUNT_MODE_SHIFT) |
++	      (COUNT_REPEAT << CPR_CTL_COUNT_REPEAT_SHIFT);
++	writel_relaxed(val, base + CPR3_REG_CPR_CTL);
++
++	/* default step quotients */
++	val = (STEP_QUOT_INIT_MIN & 0x3f) | ((STEP_QUOT_INIT_MAX & 0x3f) << 6);
++	writel_relaxed(val, base + CPR3_REG_CPR_STEP_QUOT);
++
++	/* per-thread init: THRESH, then mask all ROs initially */
++	val = (THRESH_CONS_DOWN << THRESH_CONS_DOWN_SHIFT) |
++	      (THRESH_CONS_UP << THRESH_CONS_UP_SHIFT) |
++	      (THRESH_DOWN_THRESHOLD << THRESH_DOWN_THRESH_SHIFT) |
++	      (THRESH_UP_THRESHOLD << THRESH_UP_THRESH_SHIFT);
++	writel_relaxed(val, base + CPR3_REG_THRESH(0));
++	writel_relaxed(CPR3_RO_MASK_ALL, base + CPR3_REG_RO_MASK(0));
++
++	/* corner table */
++	for (i = 0; i < cfg->corner_count; i++)
++		writel_relaxed(corner_word(&cfg->corners[i], base_quot),
++			       base + CPRH_REG_CORNER(i));
++
++	/* unmask the RO actually used (set bit = masked, so clear RO_SEL) */
++	writel_relaxed(CPR3_RO_MASK_ALL & ~BIT(RO_SEL),
++		       base + CPR3_REG_RO_MASK(0));
++
++	/*
++	 * CPRH control: base voltage + step multiplier + OSM interface enable.
++	 * OSM_ENABLED is what lets the OSM perform its voltage handshake with
++	 * the CPRh - without it the OSM cannot change frequency. init_mode /
++	 * mode_switch_delay are left at reset (0); only used with a configured
++	 * corner-switch-delay, which platina does not set.
++	 */
++	val = (DIV_RUP(VOLTAGE_BASE_UV, VOLTAGE_STEP_UV) << CTL_BASE_VOLTAGE_SHIFT) |
++	      (DIV_RUP(VOLTAGE_STEP_UV, 1000) << CTL_VOLTAGE_MULTIPLIER_SHIFT) |
++	      CPRH_CTL_OSM_ENABLED;
++	writel_relaxed(val, base + CPRH_REG_CTL);
++	wmb();
++
++	/* enable full HW closed-loop (CPRH type: MARGIN_ADJ_CTL bit4) */
++	val = readl_relaxed(base + CPR4_REG_MARGIN_ADJ_CTL);
++	val |= CPR4_MARGIN_ADJ_CTL_HW_CL_EN;
++	writel_relaxed(val, base + CPR4_REG_MARGIN_ADJ_CTL);
++	wmb();
++
++	/* finally, enable the CPR loop */
++	val = readl_relaxed(base + CPR3_REG_CPR_CTL) | CPR3_CPR_CTL_LOOP_EN;
++	writel_relaxed(val, base + CPR3_REG_CPR_CTL);
++	wmb();
++}
++
++static int sdm660_cprh_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct clk *core, *bus, *iface;
++	int i, ret;
++
++	/* CPRh needs core (RBCPR 19.2MHz) + bus + iface clocks on */
++	core = devm_clk_get(dev, "core_clk");
++	if (IS_ERR(core))
++		return dev_err_probe(dev, PTR_ERR(core), "no core_clk\n");
++	clk_set_rate(core, CPR_CLOCK_RATE);
++	ret = clk_prepare_enable(core);
++	if (ret)
++		return ret;
++
++	bus = devm_clk_get_optional(dev, "bus_clk");
++	if (!IS_ERR_OR_NULL(bus))
++		clk_prepare_enable(bus);
++	iface = devm_clk_get_optional(dev, "iface_clk");
++	if (!IS_ERR_OR_NULL(iface))
++		clk_prepare_enable(iface);
++
++	for (i = 0; i < ARRAY_SIZE(ctrl_cfgs); i++) {
++		void __iomem *base = devm_ioremap(dev, ctrl_cfgs[i].phys, 0x4000);
++
++		if (!base)
++			return -ENOMEM;
++		cprh_program(base, &ctrl_cfgs[i]);
++		dev_info(dev, "%s CPRh programmed (%d corners, closed-loop on)\n",
++			 ctrl_cfgs[i].name, ctrl_cfgs[i].corner_count);
++	}
++
++	return 0;
++}
++
++static const struct of_device_id sdm660_cprh_match[] = {
++	{ .compatible = "qcom,sdm660-cprh" },
++	{}
++};
++MODULE_DEVICE_TABLE(of, sdm660_cprh_match);
++
++static struct platform_driver sdm660_cprh_driver = {
++	.probe = sdm660_cprh_probe,
++	.driver = {
++		.name = "sdm660-cprh",
++		.of_match_table = sdm660_cprh_match,
++	},
++};
++module_platform_driver(sdm660_cprh_driver);
++
++MODULE_DESCRIPTION("Qualcomm SDM660 CPRh minimal closed-loop bring-up");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/clk/qcom/Kconfig b/drivers/clk/qcom/Kconfig
+--- a/drivers/clk/qcom/Kconfig
++++ b/drivers/clk/qcom/Kconfig
+@@ -880,6 +880,14 @@ config SDM660_CPU_CLK
+ 	  not program the OSM, so this driver loads the frequency/voltage
+ 	  tables and the sequencer microcode itself, enabling cpufreq.
+ 
++config SDM660_CPRH
++	tristate "SDM660 CPRh CPU voltage bring-up"
++	depends on ARM64 || COMPILE_TEST
++	help
++	  Programs the CPRh (CPR hardened) controllers into HW closed-loop so
++	  the OSM can raise CPU voltage/frequency. Required for cpufreq on the
++	  SDM660 CPU clusters.
++
+ config SDM_MMCC_660
+ 	tristate "SDM660 Multimedia Clock Controller"
+ 	depends on ARM64 || COMPILE_TEST
+diff --git a/drivers/clk/qcom/Makefile b/drivers/clk/qcom/Makefile
+--- a/drivers/clk/qcom/Makefile
++++ b/drivers/clk/qcom/Makefile
+@@ -124,4 +124,5 @@ obj-$(CONFIG_SDM_GPUCC_660) += gpucc-sdm660.o
+ obj-$(CONFIG_SDM660_CPU_CLK) += clk-cpu-sdm660.o
+ obj-$(CONFIG_SDM_GCC_845) += gcc-sdm845.o
++obj-$(CONFIG_SDM660_CPRH) += clk-cprh-sdm660.o
+ obj-$(CONFIG_SDM_GPUCC_845) += gpucc-sdm845.o
+ obj-$(CONFIG_SDM_LPASSCC_845) += lpasscc-sdm845.o

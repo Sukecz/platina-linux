@@ -1,0 +1,14 @@
+msm
+pmi8998_fg
+qcom_smbx
+qcom-spmi-rradc
+qcom_pil_info
+ath10k_core
+snd_soc_core
+qcom_vadc_common
+snd_soc_qcom_common
+btqca
+qcom_q6v5
+qcom_common
+snd_soc_qcom_sdw
+btrtl
