@@ -1,0 +1,99 @@
+--- a/src/libcamera/software_isp/debayer_egl.cpp
++++ b/src/libcamera/software_isp/debayer_egl.cpp
+@@ -11,6 +11,7 @@
+ 
+ #include <cmath>
+ #include <chrono>
++#include <fstream>
+ #include <stdlib.h>
+ #include <time.h>
+ 
+@@ -45,6 +46,8 @@
+ 	: Debayer(cm), stats_(std::move(stats))
+ {
+ 	profile_ = utils::secure_getenv("PLATINA_GPU_PROFILE");
++	if (const char *r = utils::secure_getenv("PLATINA_GPU_ROTATION"))
++		rotation_ = std::atoi(r);
+ 	inputDmabuf_ = utils::secure_getenv("PLATINA_GPU_INPUT_DMABUF");
+ }
+ 
+@@ -112,6 +115,7 @@
+ 	ccmUniformDataIn_ = glGetUniformLocation(programId_, "ccm");
+ 	blackLevelUniformDataIn_ = glGetUniformLocation(programId_, "blacklevel");
+ 	gammaUniformDataIn_ = glGetUniformLocation(programId_, "gamma");
++	saturationUniformDataIn_ = glGetUniformLocation(programId_, "platinaSaturation");
+ 	contrastExpUniformDataIn_ = glGetUniformLocation(programId_, "contrastExp");
+ 
+ 	textureUniformStep_ = glGetUniformLocation(programId_, "tex_step");
+@@ -416,12 +420,24 @@
+ 		{ +1.0f, +1.0f },
+ 		{ +1.0f, -1.0f },
+ 	};
+-	static const GLfloat tcoordinates[4][2] = {
++	const GLfloat baseCoordinates[4][2] = {
+ 		{ 0.0f, 0.0f },
+ 		{ 0.0f, 1.0f },
+ 		{ 1.0f, 1.0f },
+ 		{ 1.0f, 0.0f },
+ 	};
++
++	auto &tcoordinates = textureCoordinates_;
++	for (unsigned i = 0; i < 4; ++i) {
++		tcoordinates[i][0] = baseCoordinates[i][0];
++		tcoordinates[i][1] = baseCoordinates[i][1];
++	}
++	for (auto &coordinate : tcoordinates) {
++		const GLfloat x = coordinate[0], y = coordinate[1];
++		if (rotation_ == 90) { coordinate[0] = y; coordinate[1] = 1 - x; }
++		else if (rotation_ == 180) { coordinate[0] = 1 - x; coordinate[1] = 1 - y; }
++		else if (rotation_ == 270) { coordinate[0] = 1 - y; coordinate[1] = x; }
++	}
+ 
+ 	/* vertexIn - bayer_8.vert */
+ 	glEnableVertexAttribArray(attributeVertex_);
+@@ -495,6 +511,14 @@
+ 	 * Gamma
+ 	 */
+ 	glUniform1f(gammaUniformDataIn_, params.gamma);
++	float saturation = 1.0f;
++	if (const char *path = utils::secure_getenv("PLATINA_CAMERA_CONTROLS")) {
++		std::ifstream controls(path);
++		float gamma, contrast, value;
++		if (controls >> gamma >> contrast >> value && std::isfinite(value) && value >= 0 && value <= 2)
++			saturation = value;
++	}
++	glUniform1f(saturationUniformDataIn_, saturation);
+ 	LOG(Debayer, Debug) << " gammaUniformDataIn_ " << gammaUniformDataIn_ << " data " << params.gamma;
+ 
+ 	/*
+--- a/src/libcamera/software_isp/debayer_egl.h
++++ b/src/libcamera/software_isp/debayer_egl.h
+@@ -98,6 +98,9 @@
+ 
+ 	/* Gamma */
+ 	GLint gammaUniformDataIn_;
++	GLint saturationUniformDataIn_ = -1;
++	int rotation_ = 0;
++	GLfloat textureCoordinates_[4][2] = {};
+ 
+ 	/* Contrast */
+ 	GLint contrastExpUniformDataIn_;
+--- a/src/libcamera/shaders/bayer_1x_packed.frag
++++ b/src/libcamera/shaders/bayer_1x_packed.frag
+@@ -69,6 +69,7 @@
+ uniform vec3 blacklevel;
+ uniform float gamma;
+ uniform float contrastExp;
++uniform float platinaSaturation;
+ 
+ float apply_contrast(float value)
+ {
+@@ -282,6 +283,8 @@
+ 
+ 	/* Apply gamma after colour correction */
+ 	rgb = pow(rgb, vec3(gamma));
++	float luma = dot(rgb, vec3(0.299, 0.587, 0.114));
++	rgb = clamp(mix(vec3(luma), rgb, platinaSaturation), 0.0, 1.0);
+ 
+ #if defined (SWAP_BLUE)
+ 	gl_FragColor = vec4(rgb.bgr, 1.0);

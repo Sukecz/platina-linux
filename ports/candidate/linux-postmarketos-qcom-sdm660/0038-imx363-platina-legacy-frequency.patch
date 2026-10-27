@@ -1,0 +1,36 @@
+From: Platina Linux contributors
+Subject: [PATCH] media: imx363: accept the older Platina link frequency spelling
+
+Older Platina camera DTs advertised the experimental 321MHz four-lane
+mode. Interpret that value as the corrected 340MHz clock tuple, only on
+Xiaomi Platina with a 24MHz external clock and four data lanes. This
+permits a backed-up camera-module-only test on the running camera kernel,
+without writing the boot partition or interrupting charger operation.
+The local endpoint copy is changed; the live device tree is untouched.
+
+--- a/drivers/media/i2c/imx363.c
++++ b/drivers/media/i2c/imx363.c
+@@ -6,6 +6,7 @@
+ #include <linux/delay.h>
+ #include <linux/i2c.h>
+ #include <linux/module.h>
++#include <linux/of.h>
+ #include <linux/pm_runtime.h>
+ #include <linux/regulator/consumer.h>
+ #include <media/v4l2-cci.h>
+@@ -1368,6 +1369,15 @@
+ 		return ret;
+ 	}
+ 
++	if (of_machine_is_compatible("xiaomi,platina") &&
++	    clk_get_rate(imx363->clk) == 24000000 &&
++	    ep.bus.mipi_csi2.num_data_lanes == 4) {
++		unsigned int i;
++
++		for (i = 0; i < ep.nr_of_link_frequencies; i++)
++			if (ep.link_frequencies[i] == 321000000)
++				ep.link_frequencies[i] = 340000000;
++	}
+ 	ret = v4l2_link_freq_to_bitmap(&client->dev,
+ 				       ep.link_frequencies,
+ 				       ep.nr_of_link_frequencies,

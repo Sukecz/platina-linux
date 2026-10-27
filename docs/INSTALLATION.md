@@ -1,11 +1,12 @@
 # Install Linux on Xiaomi Mi 8 Lite (platina)
 
-**Development port.** The maintainer's existing installation boots and provides
-SSH; kernel 7.2.12-r1 and integration 0.3.0 passed physical Tianma display and
-shutdown tests. The existing installation also passed its 0.3.1 runtime update
-and restart checks. New full images built from 0.3.1 have a separate acceptance
-requirement. There is no supported prebuilt installer.
-Build your own images using [BUILDING.md](BUILDING.md).
+**Development port.** The maintainer's existing phone runs integration0.8.1
+with a separately qualified r9 boot/r11 camera-sensor runtime. The source kernel
+recipe is7.2.12-r12; its combined full installation has not been hardware accepted.
+The last new base image was built/audited for0.3.1. Current camera packages are
+installed separately and are not included automatically by `make images`.
+There is no supported prebuilt installer. See [BUILDING.md](BUILDING.md) and
+[CAMERA.md](CAMERA.md) for the build and camera qualification boundaries.
 
 These steps are for a **fresh installation** on **Mi 8 Lite / platina**.
 Flashing `userdata` destroys Android apps and personal data. For an existing Linux

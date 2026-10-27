@@ -1,0 +1,116 @@
+From: Platina Linux contributors
+Subject: [PATCH] media: imx363: replace broken HD mode with stock 2x2 timing
+
+Use the complete four-lane clock/readout timing for a 2016x1512 full-field
+2x2 mode rather than the imported 1080p mode. This is the geometry and
+clock tuple of the stock Platina main sensor: binning 0x22, line 3144,
+frame 2968, VT 280MHz and MIPI link 340MHz. Internal readout timing is at
+0x30f4..0x30f7, not 0x31f4..0x31f7. The earlier r9 candidate's incomplete
+clock/readout tuple produced a grid and cropped field; it was rejected.
+Only this four-lane mode is validated on Platina; the unused two-lane
+clock table is inherited and untested. Full-resolution mode is preserved.
+Related upstream report: https://gitlab.com/sdm845-mainline/linux/-/merge_requests/104
+
+--- a/drivers/media/i2c/imx363.c
++++ b/drivers/media/i2c/imx363.c
+@@ -222,21 +222,19 @@
+ 	{ IMX363_REG_REQ_LINK_BIT_RATE_MBPS_L, 0 },
+ };
+ 
++/* Four-lane 2016x1512 stock timing: VT 280MHz, link 340MHz. */
+ static const struct cci_reg_sequence mipi_642mbps_24mhz_4l[] = {
+ 	{ IMX363_REG_EXCK_FREQ, 0x1800 },
+-	{ IMX363_REG_IVTPXCK_DIV, 5 },
++	{ IMX363_REG_IVTPXCK_DIV, 3 },
+ 	{ IMX363_REG_IVTSYCK_DIV, 2 },
+ 	{ IMX363_REG_PREPLLCK_VT_DIV, 4 },
+-	{ IMX363_REG_PLL_IVT_MPY, 107 },
++	{ IMX363_REG_PLL_IVT_MPY, 70 },
+ 	{ IMX363_REG_IOPPXCK_DIV, 10 },
+-	{ IMX363_REG_IOPSYCK_DIV, 1 },
+-	{ IMX363_REG_PREPLLCK_OP_DIV, 2 },
+-	{ IMX363_REG_PLL_IOP_MPY, 216 },
+-	{ IMX363_REG_PLL_MULT_DRIV, 0 },
+-
++	{ IMX363_REG_IOPSYCK_DIV, 2 },
++	{ IMX363_REG_PREPLLCK_OP_DIV, 3 },
++	{ IMX363_REG_PLL_IOP_MPY, 170 },
++	{ IMX363_REG_PLL_MULT_DRIV, 1 },
+ 	{ IMX363_REG_CSI_LANE_MODE, 3 },
+-	{ IMX363_REG_REQ_LINK_BIT_RATE_MBPS_H, 642 * 4 },
+-	{ IMX363_REG_REQ_LINK_BIT_RATE_MBPS_L, 0 },
+ };
+ 
+ static const struct cci_reg_sequence mode_common_regs[] = {
+@@ -422,9 +420,9 @@
+ 	{CCI_REG8(0x0227), 0x00},
+ };
+ 
+-static const struct cci_reg_sequence mode_1920_1080_regs[] = {
++static const struct cci_reg_sequence mode_2016_1512_regs[] = {
+ 	{IMX363_REG_BINNING_MODE, 1},
+-	{IMX363_REG_BINNING_TYPE_V, 0x42},
++	{IMX363_REG_BINNING_TYPE_V, 0x22},
+ 	// {IMX363_REG_SCALE_MODE, 1},
+ 	// {IMX363_REG_SCALE_M, 64},
+ 	{IMX363_REG_X_ADD_STA, 0}, // analog cropping
+@@ -437,11 +435,16 @@
+ 	{IMX363_REG_Y_ODD_INC, 1},
+ 	{IMX363_REG_DIG_CROP_X_OFFSET, 0}, // digital cropping
+ 	{IMX363_REG_DIG_CROP_Y_OFFSET, 0},
+-	{IMX363_REG_DIG_CROP_IMAGE_WIDTH, 1920},
+-	{IMX363_REG_DIG_CROP_IMAGE_HEIGHT, 1080},
+-	{IMX363_REG_X_OUT_SIZE, 1920},
+-	{IMX363_REG_Y_OUT_SIZE, 1080},
+-	{IMX363_REG_FRM_LENGTH_LINES, IMX363_VTS_30FPS_HD},
++	{IMX363_REG_DIG_CROP_IMAGE_WIDTH, 2016},
++	{IMX363_REG_DIG_CROP_IMAGE_HEIGHT, 1512},
++	{IMX363_REG_X_OUT_SIZE, 2016},
++	{IMX363_REG_Y_OUT_SIZE, 1512},
++	{IMX363_REG_FRM_LENGTH_LINES, 2968},
++	{IMX363_REG_LINE_LENGTH_PCK, 3144},
++	{CCI_REG8(0x30f4), 0x02},
++	{CCI_REG8(0x30f5), 0x58},
++	{CCI_REG8(0x30f6), 0x00},
++	{CCI_REG8(0x30f7), 0x14},
+ };
+ 
+ /*
+@@ -515,7 +518,7 @@
+ 
+ static const s64 link_freq_menu_items_24[] = {
+ 	636000000ULL, // NOT SURE HOW TO FIND THIS VALUE
+-	321000000ULL,
++	340000000ULL,
+ };
+ 
+ #define REGS(_list) { .num_of_regs = ARRAY_SIZE(_list), .regs = _list, }
+@@ -535,7 +538,7 @@
+ 		}
+ 	},
+ 	[IMX363_LINK_FREQ_640MBPS] = {
+-		.pixels_per_line = IMX363_PPL_DEFAULT,
++		.pixels_per_line = 3144,
+ 		.link_cfg = {
+ 			[IMX363_2_LANE_MODE] = {
+ 				.lf_to_pix_rate_factor = 2 * 2,
+@@ -569,13 +572,13 @@
+ 		},
+ 	},
+ 	{
+-		.width = 1920,
+-		.height = 1080,
+-		.vts_def = IMX363_VTS_30FPS_HD,
+-		.vts_min = IMX363_VTS_30FPS_HD,
++		.width = 2016,
++		.height = 1512,
++		.vts_def = 2968,
++		.vts_min = 2968,
+ 		.reg_list = {
+-			.num_of_regs = ARRAY_SIZE(mode_1920_1080_regs),
+-			.regs = mode_1920_1080_regs,
++			.num_of_regs = ARRAY_SIZE(mode_2016_1512_regs),
++			.regs = mode_2016_1512_regs,
+ 		},
+ 		.link_freq_index = IMX363_LINK_FREQ_640MBPS,
+ 		.crop = {

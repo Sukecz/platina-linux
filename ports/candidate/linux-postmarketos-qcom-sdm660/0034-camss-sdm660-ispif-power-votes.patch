@@ -1,0 +1,75 @@
+From: Platina Linux contributors
+Subject: [PATCH] media: qcom: camss: separate SDM660 ISPIF reset power votes
+
+ISPIF reset and VFE streaming both call the VFE power-domain helpers.
+Those helpers use a single genpd_link pointer; a nested reset drops and
+clears it, then stream teardown calls device_link_del(NULL). Observed
+on Platina r4 after a bounded no-frame capture test, with an Oops at
+vfe_pm_domain_off/device_link_put_kref.
+
+Use balanced runtime-PM votes on the attached genpd devices for SDM660
+ISPIF reset, keeping the stream-owned links intact. Unwind successful
+votes on second-domain or reset-clock enable failure. Other platform
+power-vote implementations are unchanged.
+
+--- a/drivers/media/platform/qcom/camss/camss.c
++++ b/drivers/media/platform/qcom/camss/camss.c
+@@ -4675,7 +4675,13 @@
+ 	if (id < camss->res->vfe_num) {
+ 		struct vfe_device *vfe = &camss->vfe[id];
+ 
+-		ret = vfe->res->hw_ops->pm_domain_on(vfe);
++		/* ISPIF reset temporarily votes for both VFEs. Do not reuse the
++		 * stream's genpd_link: nested reset would clear that live pointer.
++		 */
++		if (camss->res->version == CAMSS_660)
++			ret = vfe->genpd ? pm_runtime_resume_and_get(vfe->genpd) : 0;
++		else
++			ret = vfe->res->hw_ops->pm_domain_on(vfe);
+ 	}
+ 
+ 	return ret;
+@@ -4686,7 +4692,12 @@
+ 	if (id < camss->res->vfe_num) {
+ 		struct vfe_device *vfe = &camss->vfe[id];
+ 
+-		vfe->res->hw_ops->pm_domain_off(vfe);
++		if (camss->res->version == CAMSS_660) {
++			if (vfe->genpd)
++				pm_runtime_put_sync(vfe->genpd);
++		} else {
++			vfe->res->hw_ops->pm_domain_off(vfe);
++		}
+ 	}
+ }
+ 
+--- a/drivers/media/platform/qcom/camss/camss-ispif.c
++++ b/drivers/media/platform/qcom/camss/camss-ispif.c
+@@ -329,13 +329,13 @@
+ 
+ 	ret = camss_pm_domain_on(camss, PM_DOMAIN_VFE1);
+ 	if (ret < 0)
+-		return ret;
++		goto domain0_off;
+ 
+ 	ret = camss_enable_clocks(ispif->nclocks_for_reset,
+ 				  ispif->clock_for_reset,
+ 				  camss->dev);
+ 	if (ret < 0)
+-		return ret;
++		goto domain1_off;
+ 
+ 	ret = ispif_vfe_reset(ispif, vfe_id);
+ 	if (ret)
+@@ -343,8 +343,10 @@
+ 
+ 	camss_disable_clocks(ispif->nclocks_for_reset, ispif->clock_for_reset);
+ 
++domain1_off:
++	camss_pm_domain_off(camss, PM_DOMAIN_VFE1);
++domain0_off:
+ 	camss_pm_domain_off(camss, PM_DOMAIN_VFE0);
+-	camss_pm_domain_off(camss, PM_DOMAIN_VFE1);
+ 
+ 	return ret;
+ }

@@ -16,7 +16,7 @@
     "candidate": {
       "ports": "ports/candidate",
       "kernel": "7.2.12",
-      "kernel_package": "7.2.12-r1",
+      "kernel_package": "7.2.12-r12",
       "device_package": "5-r31",
       "firmware_package": "2-r5"
     }

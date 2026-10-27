@@ -1,0 +1,118 @@
+{
+  "schema": 1,
+  "purpose": "Rear IMX363 bringup references; not hardware validation",
+  "kernel_driver": {
+    "repository": "https://gitlab.com/sdm845-mainline/linux",
+    "commit": "85f1df2a4ec71d7a91dd95a7a49f889d1595ffa8",
+    "file": "drivers/media/i2c/imx363.c",
+    "sha256": "13d15b54c0a45598d0d165b338c42ee9bbd627cb6a072bdad272e32a20c0583b",
+    "license": "GPL-2.0"
+  },
+  "wiring": {
+    "repository": "https://github.com/MiCode/Xiaomi_Kernel_OpenSource",
+    "commit": "0bb2780bccb9c7e05f0edf5db8860e779179b5f9",
+    "file": "arch/arm/boot/dts/qcom/platina-camera-sensor.dtsi",
+    "sha256": "40dffc957213ad4ddd7d15ac5fce65e35d3bd9215753153b68af75a586d14f2f",
+    "license": "GPL-2.0-only"
+  },
+  "android_reference_only": {
+    "repository": "https://github.com/TheMuppets/proprietary_vendor_xiaomi_platina",
+    "commit": "d3c57407b34d03ff3597f67129c2bb0bdcac3005",
+    "redistributed": false,
+    "files": [
+      {
+        "file": "camera_config.xml",
+        "sha256": "0a7c472da195da1e4f248680b9082a9b79e74b8f3d9f1a5eeaae1442d13dc9af"
+      },
+      {
+        "file": "libmmcamera_platina_imx363_sunny.so",
+        "sha256": "3420e804c4ac0417bf55416fb66ed0574a8e52328e71ca9162e6e2bb7554d86e"
+      },
+      {
+        "file": "libmmcamera_platina_imx363_ofilm.so",
+        "sha256": "2c90b84c787b635721f991344e2391fb416c89b05cde1604f13cfef2c8797080"
+      },
+      {
+        "file": "libactuator_platina_dw9714_sunny.so",
+        "sha256": "a59824f23b2662f42cf5b95af2c29132d564b1e5fbdc3f57987c294fd2be1c3e"
+      },
+      {
+        "file": "libactuator_platina_dw9714_ofilm.so",
+        "sha256": "d7de89e6ceeb84a020d21048e6031d7e60fdd6a8d95e6172c7add71cc34ac38e"
+      }
+    ],
+    "sensor_descriptor_evidence": {
+      "elf_file_offset": 20488,
+      "address_8bit": 32,
+      "id_register": 22,
+      "chip_id": 867
+    },
+    "csi": {
+      "slot": 0,
+      "csid": 0,
+      "lane_mask": "0x1f",
+      "lane_assignment": "0x4320",
+      "mount_angle": 90
+    }
+  },
+  "camss_supplies": {
+    "repository": "https://github.com/MiCode/Xiaomi_Kernel_OpenSource",
+    "commit": "0bb2780bccb9c7e05f0edf5db8860e779179b5f9",
+    "file": "arch/arm/boot/dts/qcom/sdm660-camera.dtsi",
+    "sha256": "d72db3f96fbadf89eea91fe2cd85039ebe86239e01108a804418b930f74c643a",
+    "vdda": "PM660 L1",
+    "vdd_sec": "PM660L L1"
+  },
+  "lane_mapping": {
+    "stock_table": [
+      0,
+      4,
+      1,
+      2,
+      3
+    ],
+    "stock_lane_assign": "0x4320",
+    "hardware_lane_assign": "0x3210",
+    "mainline_receiver_data_lanes": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "clock_lane_fixed_by_driver": true,
+    "repository": "https://github.com/MiCode/Xiaomi_Kernel_OpenSource",
+    "commit": "0bb2780bccb9c7e05f0edf5db8860e779179b5f9",
+    "files": [
+      {
+        "file": "drivers/media/platform/msm/camera_v2/sensor/csid/msm_csid.c",
+        "sha256": "e78fa4c02696e4363170c54271b81c906fa2c917251882035686c991f97f80f2"
+      },
+      {
+        "file": "drivers/media/platform/msm/camera_v2/sensor/csid/include/msm_csid_3_5_hwreg.h",
+        "sha256": "436ef12d35c05fe6a00242b63371ad1ab50921791ece5b35cb5bdadfd85fa8a3"
+      }
+    ]
+  },
+  "phy_clock_reference": {
+    "url": "https://lkml.iu.edu/2010.2/01479.html",
+    "author": "AngeloGioacchino Del Regno",
+    "requirement": "SDM630/660 csiX_phy rate must be at least csiphyX_timer rate",
+    "tested_reference_device": "Sony Xperia XA2 (SDM630)",
+    "observed_platina_before_fix_hz": {
+      "phy": 19200000,
+      "timer": 100000000
+    }
+  },
+  "lens": {
+    "driver": "dongwoon,dw9714",
+    "i2c_address_7bit": "0x0c",
+    "stock_i2c_address_8bit": "0x18",
+    "regulator": "cam-actuator-rear-vreg",
+    "enable_gpio": 50,
+    "stock_variants": [
+      "platina_dw9714_sunny",
+      "platina_dw9714_ofilm"
+    ],
+    "hardware_control_verified": false
+  }
+}

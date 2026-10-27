@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="cs"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Platina kamera</title>
+<style>
+:root{color-scheme:dark;font:14px system-ui}*{box-sizing:border-box}body{margin:0;height:100dvh;display:grid;grid-template-rows:auto minmax(0,1fr);background:#14171c;color:#eceff3}header{padding:10px 16px;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:16px}h1{font-size:18px;margin:0}#state{font-size:12px;color:#aab8c8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}main{min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 304px;gap:12px;padding:0 12px 12px}.picture{position:relative;min-height:0;min-width:0;display:grid;place-items:center;background:#090c10;border-radius:12px;overflow:hidden}#video{position:absolute;width:100%;height:100%;object-fit:contain}#video[hidden]{display:none}#placeholder{padding:16px;text-align:center;color:#aab8c8}aside{align-self:start;min-width:0;background:#20252e;border:1px solid #303846;border-radius:12px;padding:14px;display:grid;gap:12px}h2{font-size:15px;margin:0}.basic{display:grid;gap:10px}.control{min-width:0}label{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;line-height:18px;margin:0 0 3px}label output{color:#9ad1ff;white-space:nowrap;font-variant-numeric:tabular-nums}input[type=range]{display:block;width:100%;height:20px;margin:0;accent-color:#64b5fa;cursor:pointer}input:disabled{opacity:.4;cursor:default}select,button{font:inherit;padding:7px 10px;border:1px solid #4a5360;border-radius:7px;background:#303845;color:inherit;min-height:32px}select{width:100%;min-width:0;font-size:12px}button{cursor:pointer;white-space:nowrap}button:hover{border-color:#91b8de}button.primary{background:#16629c}button:disabled{opacity:.5;cursor:wait}.audio-row{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:12px;padding-top:10px;border-top:1px solid #38414f}.actions{display:flex;gap:6px;flex-wrap:wrap}.actions button{flex:1;padding:7px 5px;font-size:12px}#message{font-size:12px;color:#a8d7ff;min-height:16px;margin:0}#audio-state{font-size:12px;color:#ffb6a6;margin:0}#audio-state:empty{display:none}dialog{width:min(560px,calc(100vw - 24px));max-height:calc(100dvh - 24px);padding:16px;border:1px solid #4a5360;border-radius:14px;background:#20252e;color:inherit;box-shadow:0 18px 70px #0009}dialog::backdrop{background:#0009;backdrop-filter:blur(3px)}.dialog-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}#advanced-close{font-size:20px;line-height:20px;min-width:32px;padding:3px}.tabs{display:flex;gap:6px;margin-bottom:16px}.tabs button{flex:1;font-size:12px;padding:7px 5px}.tabs button[aria-selected=true]{background:#16629c;border-color:#64b5fa}.panel{display:grid;gap:12px}.panel[hidden]{display:none}.check{justify-content:flex-start;font-size:13px;margin:0}.readout{margin:0;color:#aab8c8;font-size:12px;line-height:18px}#colors{display:grid;gap:12px}
+@media(max-width:760px){header{padding:8px 12px;grid-template-columns:1fr auto;gap:5px 8px}#state{grid-column:1/-1;grid-row:2}main{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;gap:8px;padding:0 8px 8px}aside{padding:10px;gap:8px}.basic{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 12px}aside>h2{display:none}.audio-row{padding-top:8px}.actions button{min-height:30px}#message{font-size:11px;min-height:14px}}
+@media(max-height:580px){header{padding-top:5px;padding-bottom:5px}aside{padding:10px;gap:8px}.basic{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 10px}aside>h2{display:none}.audio-row{padding-top:6px}dialog{padding:12px}.dialog-head{margin-bottom:8px}.tabs{margin-bottom:10px}.panel,#colors{gap:8px}}
+</style>
+<header><h1>Platina kamera</h1><span id="state">Načítám stav…</span><button class="primary" id="camera-toggle" disabled>Zapnout kameru</button></header>
+<main><div class="picture"><div id="placeholder">Kamera je vypnutá.</div><img id="video" hidden alt="Živý obraz kamery"></div><aside>
+<h2>Nastavení obrazu</h2>
+<div class="basic" id="basic-controls"><div class="control" id="resolution-control"><label for="scale">Rozlišení</label><select id="scale"><option value="1">12 Mpx</option><option value="1.5">5,4 Mpx</option><option value="2">3 Mpx</option><option value="3">1,3 Mpx</option><option value="4">0,75 Mpx</option><option value="6">0,33 Mpx</option></select></div></div>
+<div class="audio-row"><button id="audio-toggle">Zapnout zvuk</button><div class="control"><label for="audio-volume">Hlasitost <output id="audio-volume-value">100 %</output></label><input id="audio-volume" type="range" min="0" max="200" value="100" step="5"></div></div>
+<p id="audio-state" role="status"></p>
+<div class="actions"><button id="advanced-toggle">Pokročilé</button><button class="primary" id="save">Uložit</button><button id="restore">Vrátit uložené</button></div>
+<p id="message" role="status"></p></aside></main>
+<dialog id="advanced" aria-labelledby="advanced-title"><div class="dialog-head"><h2 id="advanced-title">Pokročilé nastavení</h2><button id="advanced-close" aria-label="Zavřít">×</button></div>
+<div class="tabs" role="tablist" aria-label="Pokročilé nastavení"><button id="tab-exposure" role="tab" aria-selected="true" aria-controls="panel-exposure" data-panel="exposure">Expozice</button><button id="tab-white" role="tab" aria-selected="false" aria-controls="panel-white" data-panel="white" tabindex="-1">Vyvážení bílé</button><button id="tab-colors" role="tab" aria-selected="false" aria-controls="panel-colors" data-panel="colors" tabindex="-1">Barvy a orientace</button></div>
+<div class="panel" id="panel-exposure" role="tabpanel" aria-labelledby="tab-exposure"><label class="check"><input type="checkbox" id="exposure_auto"> Automatická expozice</label><div class="panel" id="exposure"></div><p id="exposure-actual" class="readout" role="status"></p></div>
+<div class="panel" id="panel-white" role="tabpanel" aria-labelledby="tab-white" hidden><label class="check"><input type="checkbox" id="automatic"> Automatické vyvážení bílé</label><div class="panel" id="white"></div></div>
+<div class="panel" id="panel-colors" role="tabpanel" aria-labelledby="tab-colors" hidden><div id="colors"></div><div class="control"><label for="rotation">Orientace</label><select id="rotation"><option value="90">Na výšku</option><option value="270">Na výšku obráceně</option><option value="0">Na šířku</option><option value="180">Na šířku obráceně</option></select></div></div>
+</dialog>
+<script>
+const defs=[['zoom','Přiblížení (×)',1,10,.1],['exposure_us','Ruční expoziční čas (µs)',100,100000,100],['analogue_gain','Ruční analogové zesílení (×)',1,8,.1],['focus','Ostření',0,1023,1],['gamma','Gama / jas',.5,4,.05],['contrast','Kontrast',.5,1.8,.02],['saturation','Sytost barev',0,2,.02],['quality','Kvalita JPEG',10,95,1],['red','Červená / vyvážení bílé',.25,4,.02],['blue','Modrá / vyvážení bílé',.25,4,.02]];
+const $=id=>document.getElementById(id),v=$('video'),status=$('state'),message=$('message');let settings=null,timer=null,online=false,applying=false,dirty=false,enabled=false,generation=null,streamGeneration=null;
+for(const [key,name,min,max,step] of defs){
+ const group=document.createElement('div');group.className='control';
+ const label=document.createElement('label');label.htmlFor=key;label.innerHTML=name+'<output id="'+key+'value"></output>';
+ const input=document.createElement('input');Object.assign(input,{type:'range',id:key,min,max,step});group.append(label,input);
+ if(['zoom','focus','quality'].includes(key))$('basic-controls').insertBefore(group,$('resolution-control'));
+ else (['exposure_us','analogue_gain'].includes(key)?$('exposure'):['red','blue'].includes(key)?$('white'):$('colors')).append(group);
+ input.addEventListener('input',()=>{if(!settings)return;if(key==='red'||key==='blue')$('automatic').checked=false;$(key+'value').textContent=input.value;dirty=true;clearTimeout(timer);timer=setTimeout(apply,150)});
+}
+const advanced=$('advanced'),tabs=[...document.querySelectorAll('[data-panel]')];
+function selectTab(tab){for(const button of tabs){const selected=button===tab;button.setAttribute('aria-selected',selected);button.tabIndex=selected?0:-1;$('panel-'+button.dataset.panel).hidden=!selected}}
+for(const [index,tab] of tabs.entries()){
+ tab.onclick=()=>selectTab(tab);
+ tab.onkeydown=e=>{let next;if(e.key==='ArrowRight')next=(index+1)%tabs.length;else if(e.key==='ArrowLeft')next=(index+tabs.length-1)%tabs.length;else if(e.key==='Home')next=0;else if(e.key==='End')next=tabs.length-1;else return;e.preventDefault();selectTab(tabs[next]);tabs[next].focus()};
+}
+$('advanced-toggle').onclick=()=>advanced.showModal();$('advanced-close').onclick=()=>advanced.close();
+
+function fill(s){settings=s;for(const [key] of defs){$(key).value=s[key];$(key+'value').textContent=s[key]}$('automatic').checked=s.automatic;$('exposure_auto').checked=s.exposure_auto;exposureMode();$('rotation').value=s.rotation;$('scale').value=s.scale}
+function exposureMode(){for(const key of ['exposure_us','analogue_gain'])$(key).disabled=$('exposure_auto').checked}
+function values(){let s={...settings};for(const [key,,, ,step] of defs)s[key]=step>=1?parseInt($(key).value):parseFloat($(key).value);s.automatic=$('automatic').checked;s.exposure_auto=$('exposure_auto').checked;s.rotation=parseInt($('rotation').value);s.scale=parseFloat($('scale').value);s.fps=30;return s}
+async function post(path,data){const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});let result=await r.json();if(!r.ok)throw Error(result.error||'Nastavení se nepodařilo');return result}
+async function apply(){if(!settings)return false;while(applying)await new Promise(r=>setTimeout(r,40));applying=true;const sent=values();try{settings=await post('/settings',sent);message.textContent='Neuloženo';dirty=JSON.stringify(values())!==JSON.stringify(sent);if(dirty){clearTimeout(timer);timer=setTimeout(apply,150)}return true}catch(e){message.textContent=e.message;return false}finally{applying=false}}
+for(const key of ['automatic','exposure_auto','rotation','scale'])$(key).addEventListener('change',()=>{exposureMode();dirty=true;apply()});
+$('save').onclick=async()=>{$('save').disabled=true;clearTimeout(timer);try{if(!await apply())return;settings=await post('/save',{});message.textContent='Uloženo'}catch(e){message.textContent=e.message}finally{$('save').disabled=false}};
+$('restore').onclick=async()=>{clearTimeout(timer);try{fill(await post('/restore',{}));dirty=false;message.textContent='Obnoveno'}catch(e){message.textContent=e.message}};
+function connect(){if(enabled){v.hidden=false;$('placeholder').hidden=true;v.src='/stream.mjpg?t='+Date.now();streamGeneration=generation}}
+v.onerror=()=>{online=false;streamGeneration=null};
+$('camera-toggle').onclick=async()=>{const b=$('camera-toggle');b.disabled=true;try{await post('/camera',{enabled:!enabled});await health()}catch(e){message.textContent=e.message}finally{b.disabled=false}};
+async function health(){try{const r=await fetch('/status',{cache:'no-store'});if(!r.ok)throw Error();const m=await r.json();enabled=m.enabled;generation=m.generation;$('exposure-actual').textContent=m.state==='on'&&Number.isFinite(m.exposure_us_actual)&&Number.isFinite(m.analogue_gain_actual)?`Skutečná expozice: ${(m.exposure_us_actual/1000).toFixed(2)} ms · zesílení ${m.analogue_gain_actual.toFixed(2)}×`:'Skutečná expozice: '+(enabled?'čekám na snímek.':'kamera je vypnutá.');$('camera-toggle').disabled=false;$('camera-toggle').textContent=enabled?'Vypnout kameru':'Zapnout kameru';if(!applying&&!dirty&&!defs.some(([k])=>document.activeElement===$(k)))fill(m.settings);if(m.state==='on'){status.textContent=`Živě · ${m.fps.toFixed(1)} fps · ${m.width} × ${m.height} · zpracování ${Math.round(m.sensor_age_ms)} ms`;if(!online||streamGeneration!==generation)connect();online=true;if(settings.automatic&&!applying&&!dirty){for(const [key,actual] of [['red',m.red_gain],['blue',m.blue_gain]]){if(Number.isFinite(actual)){$(key).value=actual;$(key+'value').textContent=actual.toFixed(2)}}}}else{online=false;v.hidden=true;v.removeAttribute('src');$('placeholder').hidden=false;status.textContent=m.state==='starting'?'Spouštím kameru…':m.state==='error'?'Chyba kamery':'Kamera vypnutá';$('placeholder').textContent=m.error||(enabled?'Připravuji živý obraz…':'Kamera je vypnutá.')}}catch(e){status.textContent='Ovládání není dostupné. Zkouším znovu…';online=false;$('camera-toggle').disabled=true}}
+health();setInterval(health,1500);
+let audioController=null,audioContext=null,audioGain=null,audioNodes=new Set();
+function stopAudio(text=''){
+ const controller=audioController;audioController=null;if(controller)controller.abort();
+ for(const source of audioNodes){try{source.stop()}catch(e){}}audioNodes.clear();
+ const context=audioContext;audioContext=null;audioGain=null;if(context)context.close().catch(()=>{});
+ $('audio-toggle').textContent='Zapnout zvuk';$('audio-state').textContent=text;
+}
+$('audio-volume').oninput=()=>{const value=Number($('audio-volume').value);$('audio-volume-value').textContent=value+' %';if(audioGain)audioGain.gain.value=value/100};
+$('audio-toggle').onclick=async()=>{
+ if(audioController){stopAudio();return}
+ const controller=new AbortController();audioController=controller;
+ $('audio-toggle').textContent='Vypnout zvuk';$('audio-state').textContent='Spouštím…';
+ try{
+  const context=new AudioContext({sampleRate:48000});audioContext=context;await context.resume();
+  if(audioController!==controller)return;
+  const gain=context.createGain();audioGain=gain;gain.gain.value=Number($('audio-volume').value)/100;gain.connect(context.destination);
+  const ticketResponse=await fetch('/audio',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}',signal:controller.signal});
+  const ticket=await ticketResponse.json();if(!ticketResponse.ok)throw Error(ticket.error||'Zvuk není dostupný.');
+  const response=await fetch('/audio.pcm?token='+encodeURIComponent(ticket.token),{signal:controller.signal,cache:'no-store'});
+  if(!response.ok){const error=await response.json();throw Error(error.error||'Mikrofon není dostupný.')}
+  const reader=response.body.getReader();let pending=new Uint8Array(0),next=0,heard=false;
+  while(audioController===controller){
+   const {value,done}=await reader.read();if(done)break;
+   const merged=new Uint8Array(pending.length+value.length);merged.set(pending);merged.set(value,pending.length);pending=merged;
+   while(pending.length>=1920){
+    const bytes=pending.slice(0,1920);pending=pending.slice(1920);
+    const buffer=context.createBuffer(1,960,ticket.rate),samples=buffer.getChannelData(0),view=new DataView(bytes.buffer);
+    for(let i=0;i<960;i++)samples[i]=view.getInt16(i*2,true)/32768;
+    const now=context.currentTime;if(next<now||next>now+.4){for(const source of audioNodes){try{source.stop()}catch(e){}}audioNodes.clear();next=now+.12}
+    const source=context.createBufferSource();source.buffer=buffer;source.connect(gain);audioNodes.add(source);source.onended=()=>audioNodes.delete(source);source.start(next);next+=buffer.duration;
+    if(!heard){heard=true;$('audio-state').textContent='';}
+   }
+  }
+  if(audioController===controller)stopAudio('Poslech skončil.');
+ }catch(e){if(audioController===controller)stopAudio(e.name==='AbortError'?'':e.message)}
+};
+addEventListener('pagehide',()=>stopAudio());
+document.addEventListener('visibilitychange',()=>{if(document.hidden)stopAudio()});
+</script></html>

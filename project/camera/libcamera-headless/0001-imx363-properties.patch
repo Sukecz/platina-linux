@@ -1,0 +1,56 @@
+From: Samuel LEGROS <sam.legros@gmail.com>
+Subject: [PATCH] libcamera: add Sony IMX363 properties and gain helper
+
+Adapted to libcamera 0.7.1 from the proposed upstream patch:
+https://patchwork.libcamera.org/patch/28201/
+Original Signed-off-by: Samuel LEGROS <sam.legros@gmail.com>
+The same 0..480 analogue gain code and 0x40 black level are exposed by
+our imported IMX363 kernel driver. Keep the Sony non-linear gain model
+so the software IPA does not treat a register code as a linear multiplier.
+
+--- a/src/ipa/libipa/camera_sensor_helper.cpp
++++ b/src/ipa/libipa/camera_sensor_helper.cpp
+@@ -617,6 +617,18 @@
+ };
+ REGISTER_CAMERA_SENSOR_HELPER("imx335", CameraSensorHelperImx335)
+ 
++class CameraSensorHelperImx363 : public CameraSensorHelper
++{
++public:
++	CameraSensorHelperImx363()
++	{
++		/* 0x40 at 10 bits; Sony gain = 512 / (512 - code). */
++		blackLevel_ = 4096;
++		gain_ = AnalogueGainLinear{ 0, 512, -1, 512 };
++	}
++};
++REGISTER_CAMERA_SENSOR_HELPER("imx363", CameraSensorHelperImx363)
++
+ class CameraSensorHelperImx415 : public CameraSensorHelper
+ {
+ public:
+--- a/src/libcamera/sensor/camera_sensor_properties.cpp
++++ b/src/libcamera/sensor/camera_sensor_properties.cpp
+@@ -261,6 +261,22 @@
+ 			.testPatternModes = {},
+ 			.sensorDelays = { },
+ 		} },
++		{ "imx363", {
++			.unitCellSize = { 1400, 1400 },
++			.testPatternModes = {
++				{ controls::draft::TestPatternModeOff, 0 },
++				{ controls::draft::TestPatternModeSolidColor, 1 },
++				{ controls::draft::TestPatternModeColorBars, 2 },
++				{ controls::draft::TestPatternModeColorBarsFadeToGray, 3 },
++				{ controls::draft::TestPatternModePn9, 4 },
++			},
++			.sensorDelays = {
++				.exposureDelay = 2,
++				.gainDelay = 2,
++				.vblankDelay = 2,
++				.hblankDelay = 2
++			},
++		} },
+ 		{ "imx415", {
+ 			.unitCellSize = { 1450, 1450 },
+ 			.testPatternModes = {},

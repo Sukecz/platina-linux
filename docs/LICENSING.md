@@ -37,6 +37,12 @@ are one GPLv2 program. Existing copyrights and SPDX notices are retained.
   source. The public firmware revision is 2-r5 to distinguish this packaging change.
 - **Firmware binaries:** proprietary and absent from this Git repository. Each
   builder supplies matching inputs locally and must respect their own usage rights.
+- **Camera/software ISP:** upstream libcamera licenses remain applicable. Changes
+  to LGPL sources and the explicitly marked exposure/zoom helpers retain
+  LGPL-2.1-or-later. The original camera consumer is GPL-2.0-only. See the
+  included LGPL-2.1 text and the original SPDX/author notices.
+- **Mesa/Freedreno and other camera dependencies:** fetched separately by recipes;
+  their component licenses are not replaced by the integration's GPLv2 license.
 - **External toolchains/packages:** retain their own licenses; the source repository
   does not vendor the full distro or claim ownership of those projects.
 
@@ -47,7 +53,7 @@ Full attribution and license texts are in NOTICE and LICENSES/.
 
 ## Source publication versus image publication
 
-This initial public repository contains source and the project logo. It does not
+This public release contains source and the project logo. It does not
 publish APKs, prebuilt disk/boot images, stock ROMs or device calibration backups.
 Building a local image does not automatically grant permission to redistribute
 its proprietary firmware, nor make a personalized SSH key/configuration public.

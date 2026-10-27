@@ -1,0 +1,30 @@
+--- a/drivers/media/platform/qcom/venus/venc.c
++++ b/drivers/media/platform/qcom/venus/venc.c
+@@ -723,15 +723,18 @@
+ 		if (ret)
+ 			return ret;
+ 
+-		ptype = HFI_PROPERTY_PARAM_VENC_H264_TRANSFORM_8X8;
+-		h264_transform.enable_type = 0;
+-		if (ctr->profile.h264 == V4L2_MPEG_VIDEO_H264_PROFILE_HIGH ||
+-		    ctr->profile.h264 == V4L2_MPEG_VIDEO_H264_PROFILE_CONSTRAINED_HIGH)
+-			h264_transform.enable_type = ctr->h264_8x8_transform;
+-
+-		ret = hfi_session_set_property(inst, ptype, &h264_transform);
+-		if (ret)
+-			return ret;
++		/* This command is implemented by the 4xx/6xx packetizers only. */
++		if (IS_V4(inst->core) || IS_V6(inst->core)) {
++			ptype = HFI_PROPERTY_PARAM_VENC_H264_TRANSFORM_8X8;
++			h264_transform.enable_type = 0;
++			if (ctr->profile.h264 == V4L2_MPEG_VIDEO_H264_PROFILE_HIGH ||
++			    ctr->profile.h264 == V4L2_MPEG_VIDEO_H264_PROFILE_CONSTRAINED_HIGH)
++				h264_transform.enable_type = ctr->h264_8x8_transform;
++
++			ret = hfi_session_set_property(inst, ptype, &h264_transform);
++			if (ret)
++				return ret;
++		}
+ 
+ 		if (ctr->layer_bitrate) {
+ 			unsigned int i;

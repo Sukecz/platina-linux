@@ -1,0 +1,110 @@
+From: Platina Linux contributors
+Subject: [PATCH] ipa: simple: add per-request manual exposure and gain
+
+Keep the default AGC algorithm unchanged. AeEnable false applies bounded
+sensor time/gain after reporting actual delayed sensor metadata. Snapshot
+controls per frame so queued requests cannot change older statistics.
+platina_exposure.h is supplied by the device integration recipe.
+
+--- a/src/ipa/simple/algorithms/agc.h
++++ b/src/ipa/simple/algorithms/agc.h
+@@ -19,12 +19,18 @@
+ 	Agc();
+ 	~Agc() = default;
+ 
++	int init(IPAContext &context, const ValueNode &tuningData) override;
++	int configure(IPAContext &context, const IPAConfigInfo &configInfo) override;
++	void queueRequest(IPAContext &context, const uint32_t frame,
++			  IPAFrameContext &frameContext, const ControlList &controls) override;
++
+ 	void process(IPAContext &context, const uint32_t frame,
+ 		     IPAFrameContext &frameContext,
+ 		     const SwIspStats *stats,
+ 		     ControlList &metadata) override;
+ 
+ private:
++	platina::ExposureSettings settings_;
+ 	void updateExposure(IPAContext &context, IPAFrameContext &frameContext, double exposureMSV);
+ };
+ 
+--- a/src/ipa/simple/algorithms/agc.cpp
++++ b/src/ipa/simple/algorithms/agc.cpp
+@@ -39,6 +39,40 @@
+ 
+ Agc::Agc()
+ {
++}
++
++int Agc::init(IPAContext &context, [[maybe_unused]] const ValueNode &tuningData)
++{
++	context.ctrlMap[&controls::AeEnable] = ControlInfo(false, true, true);
++	/* Public request envelope; configured sensor limits are enforced below. */
++	context.ctrlMap[&controls::ExposureTime] = ControlInfo(int32_t(100), int32_t(100000), int32_t(10000));
++	context.ctrlMap[&controls::AnalogueGain] = ControlInfo(1.0f, 8.0f, 1.0f);
++	return 0;
++}
++
++int Agc::configure([[maybe_unused]] IPAContext &context,
++		   [[maybe_unused]] const IPAConfigInfo &configInfo)
++{
++	settings_ = {};
++	return 0;
++}
++
++void Agc::queueRequest([[maybe_unused]] IPAContext &context,
++		      [[maybe_unused]] const uint32_t frame,
++		      IPAFrameContext &frameContext, const ControlList &controls)
++{
++	if (const auto enabled = controls.get(controls::AeEnable))
++		settings_.automatic = *enabled;
++	/* Ignore manual values while automatic, as required by AeEnable. */
++	if (!settings_.automatic) {
++		if (const auto exposure = controls.get(controls::ExposureTime))
++			settings_.exposureUs = std::clamp(*exposure, int32_t(100), int32_t(100000));
++		if (const auto gain = controls.get(controls::AnalogueGain))
++			settings_.gain = platina::sensorGain(*gain, 1.0, 8.0);
++	}
++	/* Snapshot the mode and values: another queued request must not alter
++	 * how statistics from this frame are processed. */
++	frameContext.exposureControl = settings_;
+ }
+ 
+ void Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext, double exposureMSV)
+@@ -109,6 +143,19 @@
+ 		context.configuration.agc.lineDuration * frameContext.sensor.exposure;
+ 	metadata.set(controls::ExposureTime, exposureTime.get<std::micro>());
+ 	metadata.set(controls::AnalogueGain, frameContext.sensor.gain);
++
++	if (!frameContext.exposureControl.automatic) {
++		const auto &limits = context.configuration.agc;
++		frameContext.sensor.exposure = platina::exposureLines(
++			frameContext.exposureControl.exposureUs,
++			limits.lineDuration.get<std::micro>(), limits.exposureMin, limits.exposureMax);
++		frameContext.sensor.gain = platina::sensorGain(
++			frameContext.exposureControl.gain, limits.againMin, limits.againMax);
++		context.activeState.agc.exposure = frameContext.sensor.exposure;
++		context.activeState.agc.again = frameContext.sensor.gain;
++		context.activeState.agc.valid = true;
++		return;
++	}
+ 
+ 	if (!context.activeState.agc.valid) {
+ 		/*
+--- a/src/ipa/simple/ipa_context.h
++++ b/src/ipa/simple/ipa_context.h
+@@ -19,6 +19,7 @@
+ #include <libipa/fc_queue.h>
+ 
+ #include "core_ipa_interface.h"
++#include "algorithms/platina_exposure.h"
+ 
+ namespace libcamera {
+ 
+@@ -64,6 +65,7 @@
+ };
+ 
+ struct IPAFrameContext : public FrameContext {
++	platina::ExposureSettings exposureControl;
+ 	Matrix<float, 3, 3> ccm;
+ 
+ 	struct {

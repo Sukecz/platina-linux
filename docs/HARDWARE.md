@@ -17,3 +17,8 @@ The phone has to stay awake for this headless-server use case.
 Before repurposing an older phone, inspect its battery and check its storage
 health. Keep a recovery route through the unlocked bootloader and Fastboot.
 See the [feature matrix](../README.md#feature-status) for actual support status.
+
+The tested rear-camera path is Sony IMX363 with a DW9714 focus actuator. Optional
+browser audio uses one tested built-in microphone path. Other camera suppliers,
+front/secondary sensors and other microphone paths are not interchangeable proof
+of support. See [camera status and limitations](CAMERA.md).

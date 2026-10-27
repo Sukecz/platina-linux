@@ -1,0 +1,80 @@
+From: Platina Linux contributors
+Subject: [PATCH] ipa: simple: expose manual white balance alongside AWB
+
+Use the public AwbEnable and ColourGains controls already used by other
+libcamera IPAs. Preserve automatic grey-world behaviour by default, and
+apply manual gains in linear sensor space before CCM and gamma. This
+allows live manual adjustment without changing recorded pixels afterward.
+
+--- a/src/ipa/simple/algorithms/awb.h
++++ b/src/ipa/simple/algorithms/awb.h
+@@ -19,6 +19,9 @@
+ 	Awb() = default;
+ 	~Awb() = default;
+ 
++	int init(IPAContext &context, const ValueNode &tuningData) override;
++	void queueRequest(IPAContext &context, const uint32_t frame,
++			  IPAFrameContext &frameContext, const ControlList &controls) override;
+ 	int configure(IPAContext &context, const IPAConfigInfo &configInfo) override;
+ 	void prepare(IPAContext &context,
+ 		     const uint32_t frame,
+@@ -29,6 +32,9 @@
+ 		     IPAFrameContext &frameContext,
+ 		     const SwIspStats *stats,
+ 		     ControlList &metadata) override;
++
++private:
++	bool enabled_ = true;
+ };
+ 
+ } /* namespace ipa::soft::algorithms */
+--- a/src/ipa/simple/algorithms/awb.cpp
++++ b/src/ipa/simple/algorithms/awb.cpp
+@@ -23,9 +23,35 @@
+ 
+ namespace ipa::soft::algorithms {
+ 
++int Awb::init(IPAContext &context, [[maybe_unused]] const ValueNode &tuningData)
++{
++	context.ctrlMap[&controls::AwbEnable] = ControlInfo(false, true, true);
++	context.ctrlMap[&controls::ColourGains] =
++		ControlInfo(0.25f, 4.0f, Span<const float, 2>{ { 1.0f, 1.0f } });
++	return 0;
++}
++
++void Awb::queueRequest(IPAContext &context,
++		      [[maybe_unused]] const uint32_t frame,
++		      [[maybe_unused]] IPAFrameContext &frameContext,
++		      const ControlList &controls)
++{
++	if (const auto enabled = controls.get(controls::AwbEnable))
++		enabled_ = *enabled;
++	if (!enabled_) {
++		if (const auto manual = controls.get(controls::ColourGains)) {
++			auto &gains = context.activeState.awb.gains;
++			gains = { { (*manual)[0], 1.0f, (*manual)[1] } };
++			RGB<double> rgb{ { 1 / gains.r(), 1.0, 1 / gains.b() } };
++			context.activeState.awb.temperatureK = estimateCCT(rgb);
++		}
++	}
++}
++
+ int Awb::configure(IPAContext &context,
+ 		   [[maybe_unused]] const IPAConfigInfo &configInfo)
+ {
++	enabled_ = true;
+ 	auto &gains = context.activeState.awb.gains;
+ 	gains = { { 1.0, 1.0, 1.0 } };
+ 
+@@ -64,6 +90,11 @@
+ 		static_cast<float>(frameContext.gains.blue)
+ 	};
+ 	metadata.set(controls::ColourGains, mdGains);
++	metadata.set(controls::AwbEnable, enabled_);
++	if (!enabled_) {
++		metadata.set(controls::ColourTemperature, context.activeState.awb.temperatureK);
++		return;
++	}
+ 
+ 	if (!stats->valid)
+ 		return;

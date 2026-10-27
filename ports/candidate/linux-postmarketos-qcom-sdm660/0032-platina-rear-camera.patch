@@ -1,0 +1,82 @@
+From: Platina Linux contributors
+Subject: [PATCH] arm64: dts: qcom: platina: wire the rear IMX363 camera
+
+Wiring from Xiaomi platina-o-oss 0bb2780bccb9c7e05f0edf5db8860e779179b5f9,
+platina-camera-sensor.dtsi (GPL-2.0-only). Rear slot: CCI0, reset GPIO46,
+MCLK0 24MHz, CSIPHY0; stock camera config uses lane mask 0x1f/map 0x4320.
+Both Sunny and Ofilm sensor descriptors specify 8-bit address 0x20,
+ID register 0x0016, ID 0x0363. No front/aux camera, flash or lens actuator.
+Stock CSID v3.5/v5.0 remaps lane numbers through {0,4,1,2,3}:
+0x4320 becomes hardware 0x3210. Mainline therefore needs data-lanes 0,1,2,3;
+its fixed PHY clock lane is not exposed in DT.
+Existing board-specific camera supply gates are preserved. CAMSS CSID
+supplies map to PM660 L1 and PM660L L1 per stock sdm660-camera.dtsi.
+
+--- a/arch/arm64/boot/dts/qcom/sdm660-xiaomi-platina.dts
++++ b/arch/arm64/boot/dts/qcom/sdm660-xiaomi-platina.dts
+@@ -303,6 +303,65 @@
+ 	};
+ };
+ 
++
++/* Rear main camera: stock platina camera slot 0, CCI master 0, CSIPHY 0. */
++&camss {
++	vdda-supply = <&vreg_l1a_1p225>;
++	vdd_sec-supply = <&vreg_l1b_0p925>;
++	power-domains = <&mmcc CAMSS_VFE0_GDSC>,
++			<&mmcc CAMSS_VFE1_GDSC>,
++			<&mmcc CAMSS_TOP_GDSC>;
++	status = "okay";
++
++	ports {
++		port@0 {
++			reg = <0>;
++			platina_csiphy0_ep: endpoint {
++				data-lanes = <0 1 2 3>;
++				remote-endpoint = <&platina_imx363_ep>;
++			};
++		};
++	};
++};
++
++&cci {
++	status = "okay";
++	pinctrl-0 = <&cci0_default>;
++};
++
++&cci_i2c0 {
++	status = "okay";
++
++	camera@10 {
++		compatible = "sony,imx363";
++		reg = <0x10>;
++		reset-gpios = <&tlmm 46 GPIO_ACTIVE_LOW>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&camera_rear_default>;
++		clocks = <&mmcc CAMSS_MCLK0_CLK>;
++		clock-names = "xvclk";
++		clock-frequency = <24000000>;
++		vana-supply = <&cam_avdd_rear_vreg>;
++		vdig-supply = <&cam_dvdd_rear_vreg>;
++		vif-supply = <&vreg_l14a_1p8>;
++		orientation = <1>;
++		rotation = <90>;
++
++		port {
++			platina_imx363_ep: endpoint {
++				clock-lanes = <0>;
++				data-lanes = <1 2 3 4>;
++				link-frequencies = /bits/ 64 <636000000 340000000>;
++				remote-endpoint = <&platina_csiphy0_ep>;
++			};
++		};
++	};
++};
++
++&cci_i2c1 {
++	status = "disabled";
++};
++
+ &blsp1_uart2 {
+ 	status = "okay";
+ };

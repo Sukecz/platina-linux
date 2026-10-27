@@ -19,6 +19,6 @@ jobs:
       - name: Install host tools for screen integration tests
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends python3-pil fonts-dejavu-core
+          sudo apt-get install -y --no-install-recommends g++ python3-pil fonts-dejavu-core
       - name: Validate sources and run offline tests
         run: make check

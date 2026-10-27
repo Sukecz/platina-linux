@@ -1,0 +1,26 @@
+From: Platina Linux contributors
+Subject: [PATCH] arm64: dts: qcom: platina: connect rear DW9714 lens
+
+Stock camera_config.xml selects platina_dw9714_sunny/ofilm for IMX363.
+Both actuator descriptors use 8-bit address 0x18 (7-bit 0x0c).
+Reuse the existing board actuator regulator (TLMM50, 3.6V) and the
+upstream DW9714 driver. No flash, auxiliary camera or arbitrary probing.
+
+--- a/arch/arm64/boot/dts/qcom/sdm660-xiaomi-platina.dts
++++ b/arch/arm64/boot/dts/qcom/sdm660-xiaomi-platina.dts
+@@ -332,8 +332,15 @@
+ &cci_i2c0 {
+ 	status = "okay";
+ 
++	cam_rear_focus: lens@c {
++		compatible = "dongwoon,dw9714";
++		reg = <0x0c>;
++		vcc-supply = <&cam_actuator_rear_vreg>;
++	};
++
+ 	camera@10 {
+ 		compatible = "sony,imx363";
++		lens-focus = <&cam_rear_focus>;
+ 		reg = <0x10>;
+ 		reset-gpios = <&tlmm 46 GPIO_ACTIVE_LOW>;
+ 		pinctrl-names = "default";

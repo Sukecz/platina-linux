@@ -1,0 +1,56 @@
+--- a/include/libcamera/internal/egl.h
++++ b/include/libcamera/internal/egl.h
+@@ -119,6 +119,7 @@
+ 	void useProgram(GLuint programId);
+ 	void deleteProgram(GLuint programId);
+ 	void syncOutput();
++	void flushOutput();
+ 
+ private:
+ 	LIBCAMERA_DISABLE_COPY_AND_MOVE(eGL)
+--- a/src/libcamera/egl.cpp
++++ b/src/libcamera/egl.cpp
+@@ -96,6 +96,15 @@
+ 	ASSERT(tid_ == Thread::currentId());
+ 
+ 	glFinish();
++}
++
++/**
++ * \brief Submit GPU work without waiting, so CPU statistics can overlap it.
++ */
++void eGL::flushOutput()
++{
++	ASSERT(tid_ == Thread::currentId());
++	glFlush();
+ }
+ 
+ /**
+--- a/src/libcamera/software_isp/debayer_egl.cpp
++++ b/src/libcamera/software_isp/debayer_egl.cpp
+@@ -516,7 +516,7 @@
+ 		LOG(eGL, Error) << "Drawing scene fail " << err;
+ 		return -ENODEV;
+ 	} else {
+-		egl_.syncOutput();
++		egl_.flushOutput();
+ 	}
+ 
+ 	return 0;
+@@ -547,13 +547,14 @@
+ 		goto error;
+ 	}
+ 
+-	bench_.finishFrame();
+-
+ 	metadata.planes()[0].bytesused = output->planes()[0].length;
+ 
+ 	/* Calculate stats for the whole frame */
+ 	stats_->processFrame(frame, 0, input);
+ 	dmaSyncers.clear();
++
++	egl_.syncOutput();
++	bench_.finishFrame();
+ 
+ 	outputBufferReady.emit(output);
+ 	inputBufferReady.emit(input);

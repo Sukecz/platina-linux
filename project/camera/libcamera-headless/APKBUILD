@@ -1,0 +1,91 @@
+# Headless GPU-enabled camera development build for Platina.
+pkgname=platina-libcamera
+pkgver=0.7.1
+pkgrel=31
+pkgdesc="Headless libcamera with GPU/CPU software ISP for Platina"
+url="https://libcamera.org/"
+arch="aarch64"
+license="LGPL-2.1-or-later AND GPL-2.0-or-later AND CC0-1.0"
+depends="alsa-utils python3 py3-paho-mqtt v4l-utils platina-mesa-freedreno"
+sonameprefix="platina-"
+makedepends="platina-mesa-freedreno coreutils eudev-dev gnutls-dev libevent-dev libjpeg-turbo-dev libyuv libyuv-dev linux-headers meson py3-jinja2 py3-ply py3-yaml python3-dev yaml-dev"
+source="https://gitlab.freedesktop.org/camera/libcamera/-/archive/v$pkgver/libcamera-v$pkgver.tar.gz
+ imx363.yaml
+ 0001-imx363-properties.patch
+ 0002-simple-manual-white-balance.patch
+ 0003-platina-full-field-gpu-scale.patch
+ 0004-overlap-gpu-statistics.patch
+ 0005-platina-gpu-profile-dmabuf.patch
+ 0006-platina-gpu-rotation-saturation.patch
+ 0011-simple-manual-exposure.patch
+ 0012-platina-gpu-zoom.patch
+ platina_exposure.h
+ platina_zoom.h
+ capture.cpp
+ serve.py
+ camera_mqtt.py
+ platina-camera.openrc
+ preview.html
+ configuration.yaml"
+builddir="$srcdir/libcamera-v$pkgver"
+options="!strip !check"
+ldpath="/usr/lib/platina-camera/lib"
+
+prepare() {
+ default_prepare
+ cp "$srcdir/platina_exposure.h" "$builddir/src/ipa/simple/algorithms/platina_exposure.h"
+ cp "$srcdir/platina_zoom.h" "$builddir/src/libcamera/software_isp/platina_zoom.h"
+}
+
+build() {
+ export LDFLAGS="$LDFLAGS -Wl,-rpath,/usr/lib/platina-camera/gpu/lib -Wl,-rpath,/usr/lib/platina-camera/gpu/lib/dri"
+ export PKG_CONFIG_PATH=/usr/lib/platina-camera/gpu/lib/pkgconfig
+ abuild-meson --prefix=/usr/lib/platina-camera \
+  --bindir=/usr/lib/platina-camera/bin --libdir=/usr/lib/platina-camera/lib \
+  --libexecdir=/usr/lib/platina-camera/libexec --datadir=/usr/lib/platina-camera/share \
+  --includedir=/usr/lib/platina-camera/include \
+  -Dpipelines=simple -Dipas=simple -Dsoftisp-gpu=enabled \
+  -Dcam=enabled -Dcam-jpeg=enabled -Dcam-output-kms=disabled -Dcam-output-sdl2=disabled \
+  -Dqcam=disabled -Dgstreamer=disabled -Dpycamera=disabled -Dlc-compliance=disabled \
+  -Ddocumentation=disabled -Dapps-output-dng=disabled -Dlibdw=disabled -Dlibunwind=disabled \
+  -Dtracing=disabled -Dv4l2=disabled -Dtest=false -Dwerror=false . output
+ meson compile -C output -j 2
+ $CXX -std=c++17 -O2 -pthread -Iinclude -Ioutput/include "$srcdir/capture.cpp" \
+  -Loutput/src/libcamera -Loutput/src/libcamera/base \
+  -Wl,-rpath,/usr/lib/platina-camera/lib -Wl,-rpath-link,output/src/libcamera/base \
+  -Wl,-rpath-link,/usr/lib/platina-camera/gpu/lib -Wl,-rpath-link,/usr/lib/platina-camera/gpu/lib/dri \
+  -lcamera -lcamera-base -ljpeg -lyuv -o output/platina-camera-capture
+}
+
+package() {
+ DESTDIR="$pkgdir" meson install --no-rebuild -C output
+ install -Dm755 output/platina-camera-capture "$pkgdir/usr/lib/platina-camera/bin/platina-camera-capture"
+ install -Dm755 "$srcdir/serve.py" "$pkgdir/usr/lib/platina-camera/bin/serve.py"
+ install -Dm644 "$srcdir/camera_mqtt.py" "$pkgdir/usr/lib/platina-camera/bin/camera_mqtt.py"
+ install -Dm755 "$srcdir/platina-camera.openrc" "$pkgdir/etc/init.d/platina-camera"
+ install -Dm644 "$srcdir/preview.html" "$pkgdir/usr/lib/platina-camera/bin/preview.html"
+ install -Dm644 "$srcdir/configuration.yaml" "$pkgdir/usr/lib/platina-camera/share/libcamera/configuration.yaml"
+ install -Dm644 "$srcdir/imx363.yaml" "$pkgdir/usr/lib/platina-camera/share/libcamera/ipa/simple/imx363.yaml"
+
+}
+
+sha512sums="
+0e886021a3bbd668184b581248b9d89a8e909360a7f138237a2c03b41b477cb255bd6daf4932fdebf86c3410b4deccc4c5db93264ed0c6c9969076cdbae8a77b  libcamera-v0.7.1.tar.gz
+57c812b5666ebbe1f2a56e1469ad2233925064b4ed7d132b72e4913e24499eb5975f0a4cbe0941754f0a60b35313e19f27193ad1e458848519e5f826ca4c5e37  imx363.yaml
+6af6d7712077367f02a48988af33d22b50d4f2ea253463786ffc3b06e3150a7c6b0455f83e5cbd59388d5a76f8bca77d8a804de9452e0d747a1595501faf8d1c  0001-imx363-properties.patch
+cdb6f50dfc725b7266eac7feb7d880e2915d0e7872c88f522f3cd4f2a80dcd150ecde1a40c1dcfd054693f8028216841ca2c84e85525592aa067571d3c247755  0002-simple-manual-white-balance.patch
+2d84217307a09398767810e5a20bf1489dde38dbf3c19675ff4d90b44996fb486aa29aa096b4e6accba53d80c34dc5a8475f62939e37a63754cac2dc51f415c4  0003-platina-full-field-gpu-scale.patch
+e5a6e44e6243029038215e198259a4f213feceeb56ce0c71525edaaf3f350a2c0feaf8c14e2e69cd3501b80351b71b7ce69f9618ae776ed572c94b3970493c9d  0004-overlap-gpu-statistics.patch
+5756fc1de6f2de7db742d5be9fa01f91bdaa71a44b0cb7efcfb4572b464ba912f49795d85576b9b4b2bcedd7a99417c31984c54cb136456479b70f98bdb4ea05  0005-platina-gpu-profile-dmabuf.patch
+24f343ee9afc89503e0d3cddf736e06e7b27fe7d2d42552dfb49e8165c59cb11d48f55e8b38252a1ba54d7ad7189faf7510111d4fe7923e773f7d0774212b4b1  0006-platina-gpu-rotation-saturation.patch
+d4efc6815992d7e79b12583839f5394700c06f26c057feb2027391cfa9e12fe3bdeb4a7279dea4b1d76f45cd0372b5d5bb0d056781aaea5d762c4fb0f33e273b  0011-simple-manual-exposure.patch
+1cfd41c80346d90232aa842f71f1ceeb9e1322b0dc100dfa61964ee45c1551ed2f0b73211ae9abb94969d871b9b1a1ed3fa14bfc6b0c30dbcdbb436a8ff1ee15  0012-platina-gpu-zoom.patch
+8938ab20e273c06ab284f825b248e0190167165290d3f54dfdeba3066754dcbca0bde16ed6e29e455e1657fea44bf3fb2e962cdc9e2e3aad0fab214fc09b339b  platina_exposure.h
+d083da94fbd1dd6e7d2e41ea22767e90e9fe8fcba9c4708676683e248c4131d5fbe45a6e4fc0d84680e2f17dbf9ebda75f99dc64e45172138cacb8c24b52de71  platina_zoom.h
+c28e44e939b3f212fd275967762f67e41a831b52a82a2a512ca21f1d77093ab8a2b1e926b55f775aa42b19e4339ffcf9d66d0223106e0ed41722828c01441441  capture.cpp
+4c5a42e531579783f03cd06d444e53ca159ef7ad043aafe8b6f9344e7f347e45d6fcf52600a2c0fec71921d4ccb39ab5f66f865ee9f804a897273859fa9ea615  serve.py
+8c8951b57b88f7e0a24d2f9f2fd9a2aaf0a717c2069e4b44a89c09e4c4891d10d7ff1732b3f3ba3a71e376c30738698a25ffb37949cedb515726aedbf6477cf5  camera_mqtt.py
+19550862ce07ec281021923a22d5149d582126bf202a7b4a7214d4cd5001c8ceadc351ddcc2fe7cf7909db53e2a6e77304fc7e7c514b174b49fd6ba5843ebf79  platina-camera.openrc
+3a89c3955e01ab24478f0806df294d40cced80b8b17b9421727a176449908da38d7c1f4f9fb61d8ba193fc58b303b0665b996014ab446fab18994c1f97c486ed  preview.html
+1ed1a8976f5379216dff442ca9f5c849a5cde1c0a02fe8b07c8eb66d4058cc985f98d91e83cb144a740653577de2f7cd79e84552289411a630510926f237395a  configuration.yaml
+"

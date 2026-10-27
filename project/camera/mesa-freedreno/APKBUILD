@@ -1,0 +1,35 @@
+# Isolated headless Adreno userspace; no desktop, Vulkan or LLVM runtime.
+pkgname=platina-mesa-freedreno
+pkgver=26.1.6
+pkgrel=0
+pkgdesc="Minimal Freedreno EGL/GLES for the Platina camera"
+url="https://mesa3d.org/"
+arch="aarch64"
+license="MIT AND SGI-B-2.0 AND BSL-1.0"
+sonameprefix="platina-gpu-"
+ldpath="/usr/lib/platina-camera/gpu/lib:/usr/lib/platina-camera/gpu/lib/dri"
+makedepends="bison eudev-dev expat-dev flex libdrm-dev elfutils-dev meson py3-mako py3-packaging py3-ply py3-yaml zlib-dev"
+source="https://archive.mesa3d.org/mesa-$pkgver.tar.xz"
+builddir="$srcdir/mesa-$pkgver"
+options="!check"
+
+build() {
+ abuild-meson --prefix=/usr/lib/platina-camera/gpu \
+  --libdir=/usr/lib/platina-camera/gpu/lib \
+  --includedir=/usr/lib/platina-camera/gpu/include \
+  --datadir=/usr/lib/platina-camera/gpu/share \
+  -Dgallium-drivers=freedreno -Dfreedreno-kmds=msm \
+  -Dvulkan-drivers=[] -Dplatforms=[] -Dopengl=false \
+  -Dglx=disabled -Dglvnd=disabled -Degl=enabled -Dgbm=enabled \
+  -Dgles1=disabled -Dgles2=enabled -Dllvm=disabled -Ddraw-use-llvm=false \
+  -Dgallium-rusticl=false -Dgallium-va=disabled -Dvideo-codecs=[] \
+  -Dxmlconfig=disabled -Dzstd=disabled -Dbuild-tests=false \
+  -Dwerror=false . output
+ meson compile -C output -j 2
+}
+package() {
+ DESTDIR="$pkgdir" meson install --no-rebuild -C output
+}
+sha512sums="
+6746b73f5b87e8ff3723eee586b4b5f033dbe6d13cd0309d743b7fa484c350268859ec8ff21aadcbca7a04070cdaa7828146dd28dde4b1935bb879891d687f0b  mesa-26.1.6.tar.xz
+"

@@ -1,0 +1,47 @@
+--- a/src/libcamera/pipeline/simple/simple.cpp
++++ b/src/libcamera/pipeline/simple/simple.cpp
+@@ -692,6 +692,10 @@
+  */
+ void SimpleCameraData::tryPipeline(unsigned int code, const Size &size)
+ {
++	/* Platina: retain the full sensor field of view at every output size. */
++	if (sensor_->model() == "imx363" && size != Size(4032, 3024))
++		return;
++
+ 	/*
+ 	 * Propagate the format through the pipeline, and enumerate the
+ 	 * corresponding possible V4L2 pixel formats on the video node.
+--- a/src/libcamera/software_isp/debayer_egl.cpp
++++ b/src/libcamera/software_isp/debayer_egl.cpp
+@@ -326,8 +326,10 @@
+ 		    ~(inputConfig_.patternSize.width - 1);
+ 	window_.y = ((inputCfg.size.height - outputCfg.size.height) / 2) &
+ 		    ~(inputConfig_.patternSize.height - 1);
+-	window_.width = outputCfg.size.width;
+-	window_.height = outputCfg.size.height;
++	window_.width = inputCfg.size.width;
++	window_.height = inputCfg.size.height;
++	window_.x = 0;
++	window_.y = 0;
+ 
+ 	/*
+ 	 * Don't pass x,y from window_ since process() already adjusts for it.
+@@ -389,8 +391,7 @@
+ 	 * Scale input to output size, keeping the aspect ratio and preferring
+ 	 * cropping over black bars.
+ 	 */
+-	GLfloat scale = std::max((GLfloat)window_.width / width_,
+-				 (GLfloat)window_.height / height_);
++	GLfloat scale = 1.0f;
+ 	GLfloat trans = -(1.0f - scale);
+ 	GLfloat projMatrix[] = {
+ 		scale, 0, 0, 0,
+@@ -507,7 +508,7 @@
+ 	egl_.createOutputDMABufTexture2D(*eglImageBayerOut_, out_fd);
+ 
+ 	setShaderVariableValues(params);
+-	glViewport(0, 0, width_, height_);
++	glViewport(0, 0, outputSize_.width, outputSize_.height);
+ 	glClear(GL_COLOR_BUFFER_BIT);
+ 	glDrawArrays(GL_TRIANGLE_FAN, 0, DEBAYER_OPENGL_COORDS);
+ 

@@ -1,0 +1,37 @@
+From: Platina Linux contributors
+Subject: [PATCH] software ISP: centered live digital zoom on GPU
+
+Read the appended zoom control from the atomically replaced controls file.
+Crop normalized input coordinates after rotation, before debayering/scaling.
+Keep the output viewport, packed RAW addressing and Bayer parity unchanged.
+platina_zoom.h is provided by the device integration recipe.
+
+--- a/src/libcamera/software_isp/debayer_egl.cpp
++++ b/src/libcamera/software_isp/debayer_egl.cpp
+@@ -12,6 +12,7 @@
+ #include <cmath>
+ #include <chrono>
+ #include <fstream>
++#include "platina_zoom.h"
+ #include <stdlib.h>
+ #include <time.h>
+ 
+@@ -432,11 +433,18 @@
+ 		tcoordinates[i][0] = baseCoordinates[i][0];
+ 		tcoordinates[i][1] = baseCoordinates[i][1];
+ 	}
++	float zoom = 1.0f;
++	if (const char *path = utils::secure_getenv("PLATINA_CAMERA_CONTROLS")) {
++		std::ifstream controls(path);
++		zoom = platina::zoomFromControls(controls);
++	}
+ 	for (auto &coordinate : tcoordinates) {
+ 		const GLfloat x = coordinate[0], y = coordinate[1];
+ 		if (rotation_ == 90) { coordinate[0] = y; coordinate[1] = 1 - x; }
+ 		else if (rotation_ == 180) { coordinate[0] = 1 - x; coordinate[1] = 1 - y; }
+ 		else if (rotation_ == 270) { coordinate[0] = 1 - y; coordinate[1] = x; }
++		coordinate[0] = platina::zoomCoordinate(coordinate[0], zoom);
++		coordinate[1] = platina::zoomCoordinate(coordinate[1], zoom);
+ 	}
+ 
+ 	/* vertexIn - bayer_8.vert */

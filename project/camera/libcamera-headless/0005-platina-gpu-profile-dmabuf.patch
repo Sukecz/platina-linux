@@ -1,0 +1,160 @@
+--- a/src/libcamera/egl.cpp
++++ b/src/libcamera/egl.cpp
+@@ -127,7 +127,7 @@
+ 	EGLint image_attrs[] = {
+ 		EGL_WIDTH, (EGLint)eglImage.width_,
+ 		EGL_HEIGHT, (EGLint)eglImage.height_,
+-		EGL_LINUX_DRM_FOURCC_EXT, DRM_FORMAT_ARGB8888,
++		EGL_LINUX_DRM_FOURCC_EXT, output ? DRM_FORMAT_ARGB8888 : DRM_FORMAT_R8,
+ 		EGL_DMA_BUF_PLANE0_FD_EXT, fd,
+ 		EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0,
+ 		EGL_DMA_BUF_PLANE0_PITCH_EXT, (EGLint)eglImage.stride_,
+@@ -153,6 +153,8 @@
+ 	// Generate texture with filter semantics
+ 	glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, image);
+ 	eglDestroyImageKHR(display_, image);
++	if (glGetError() != GL_NO_ERROR)
++		return -ENODEV;
+ 
+ 	// Nearest filtering
+ 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+--- a/src/libcamera/software_isp/debayer_egl.cpp
++++ b/src/libcamera/software_isp/debayer_egl.cpp
+@@ -10,6 +10,7 @@
+ #include "debayer_egl.h"
+ 
+ #include <cmath>
++#include <chrono>
+ #include <stdlib.h>
+ #include <time.h>
+ 
+@@ -20,6 +21,13 @@
+ #include "../glsl_shaders.h"
+ 
+ namespace libcamera {
++
++using ProfileClock = std::chrono::steady_clock;
++static double milliseconds(ProfileClock::time_point a, ProfileClock::time_point b)
++{
++	return std::chrono::duration<double, std::milli>(b - a).count();
++}
++
+ 
+ /**
+  * \class DebayerEGL
+@@ -36,6 +44,8 @@
+ DebayerEGL::DebayerEGL(std::unique_ptr<SwStatsCpu> stats, const CameraManager &cm)
+ 	: Debayer(cm), stats_(std::move(stats))
+ {
++	profile_ = utils::secure_getenv("PLATINA_GPU_PROFILE");
++	inputDmabuf_ = utils::secure_getenv("PLATINA_GPU_INPUT_DMABUF");
+ }
+ 
+ DebayerEGL::~DebayerEGL()
+@@ -496,13 +506,21 @@
+ 	return;
+ }
+ 
+-int DebayerEGL::debayerGPU(MappedFrameBuffer &in, int out_fd, const DebayerParams &params)
++int DebayerEGL::debayerGPU(MappedFrameBuffer &in, int in_fd, int out_fd, const DebayerParams &params)
+ {
+ 	/* eGL context switch */
+ 	egl_.makeCurrent();
+ 
+ 	/* Create a standard texture input */
+-	egl_.createTexture2D(*eglImageBayerIn_, glFormat_, inputConfig_.stride / bytesPerPixel_, height_, in.planes()[0].data());
++	auto started = ProfileClock::now();
++	if (inputDmabuf_ && egl_.createInputDMABufTexture2D(*eglImageBayerIn_, in_fd)) {
++		inputDmabuf_ = false;
++		LOG(Debayer, Warning) << "R8 DMA import unavailable; using texture upload";
++	}
++	if (!inputDmabuf_)
++		egl_.createTexture2D(*eglImageBayerIn_, glFormat_, inputConfig_.stride / bytesPerPixel_, height_, in.planes()[0].data());
++	auto uploaded = ProfileClock::now();
++	inputMs_ = milliseconds(started, uploaded);
+ 
+ 	/* Generate the output render framebuffer as render to texture */
+ 	egl_.createOutputDMABufTexture2D(*eglImageBayerOut_, out_fd);
+@@ -519,6 +537,7 @@
+ 	} else {
+ 		egl_.flushOutput();
+ 	}
++	submitMs_ = milliseconds(uploaded, ProfileClock::now());
+ 
+ 	return 0;
+ }
+@@ -526,6 +545,8 @@
+ void DebayerEGL::process(uint32_t frame, FrameBuffer *input, FrameBuffer *output, const DebayerParams &params)
+ {
+ 	bench_.startFrame();
++	auto started = ProfileClock::now();
++	ProfileClock::time_point statsStart, statsEnd, finished;
+ 
+ 	std::vector<DmaSyncer> dmaSyncers;
+ 
+@@ -543,7 +564,7 @@
+ 		goto error;
+ 	}
+ 
+-	if (debayerGPU(in, output->planes()[0].fd.get(), params)) {
++	if (debayerGPU(in, input->planes()[0].fd.get(), output->planes()[0].fd.get(), params)) {
+ 		LOG(Debayer, Error) << "debayerGPU failed";
+ 		goto error;
+ 	}
+@@ -551,10 +572,25 @@
+ 	metadata.planes()[0].bytesused = output->planes()[0].length;
+ 
+ 	/* Calculate stats for the whole frame */
++	statsStart = ProfileClock::now();
+ 	stats_->processFrame(frame, 0, input);
++	statsEnd = ProfileClock::now();
+ 	dmaSyncers.clear();
+ 
+ 	egl_.syncOutput();
++	finished = ProfileClock::now();
++	if (profile_) {
++		const double values[] = {milliseconds(started, finished), inputMs_, submitMs_, milliseconds(statsStart, statsEnd), milliseconds(statsEnd, finished)};
++		for (unsigned i = 0; i < 5; ++i) profileTotals_[i] += values[i];
++		if (++profileFrames_ == 60) {
++			LOG(Debayer, Info) << "PlatinaGPU total_ms=" << profileTotals_[0] / 60
++				<< " input_ms=" << profileTotals_[1] / 60 << " submit_ms=" << profileTotals_[2] / 60
++				<< " stats_ms=" << profileTotals_[3] / 60 << " wait_ms=" << profileTotals_[4] / 60
++				<< " input_dmabuf=" << inputDmabuf_;
++			profileFrames_ = 0;
++			for (double &value : profileTotals_) value = 0;
++		}
++	}
+ 	bench_.finishFrame();
+ 
+ 	outputBufferReady.emit(output);
+@@ -580,7 +616,7 @@
+ 	LOG(Debayer, Debug) << "Available fragment shader texture units " << maxTextureImageUnits;
+ 
+ 	/* Raw bayer input as texture */
+-	eglImageBayerIn_ = std::make_unique<eGLImage>(width_, height_, inputConfig_.stride, GL_TEXTURE0, 0);
++	eglImageBayerIn_ = std::make_unique<eGLImage>(inputConfig_.stride / bytesPerPixel_, height_, inputConfig_.stride, GL_TEXTURE0, 0);
+ 
+ 	/* Texture we will render to */
+ 	eglImageBayerOut_ = std::make_unique<eGLImage>(outputSize_.width, outputSize_.height, outputConfig_.stride, GL_TEXTURE1, 1);
+--- a/src/libcamera/software_isp/debayer_egl.h
++++ b/src/libcamera/software_isp/debayer_egl.h
+@@ -66,7 +66,7 @@
+ 	int initBayerShaders(PixelFormat inputFormat, PixelFormat outputFormat);
+ 	int getShaderVariableLocations();
+ 	void setShaderVariableValues(const DebayerParams &params);
+-	int debayerGPU(MappedFrameBuffer &in, int out_fd, const DebayerParams &params);
++	int debayerGPU(MappedFrameBuffer &in, int in_fd, int out_fd, const DebayerParams &params);
+ 
+ 	/* Shader program identifiers */
+ 	GLuint vertexShaderId_ = 0;
+@@ -107,6 +107,10 @@
+ 	eGL egl_;
+ 	uint32_t width_;
+ 	uint32_t height_;
++	bool profile_ = false;
++	bool inputDmabuf_ = false;
++	double inputMs_ = 0, submitMs_ = 0, profileTotals_[5] = {};
++	unsigned int profileFrames_ = 0;
+ 	GLint glFormat_;
+ 	unsigned int bytesPerPixel_;
+ 	uint32_t shaderStridePixels_;

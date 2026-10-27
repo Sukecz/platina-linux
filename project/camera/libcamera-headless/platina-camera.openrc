@@ -1,0 +1,23 @@
+#!/sbin/openrc-run
+description="Platina camera web and Home Assistant controls (capture OFF at startup)"
+command="/usr/bin/python3"
+command_args="/usr/lib/platina-camera/bin/serve.py --listen 0.0.0.0"
+command_user="root:root"
+supervisor="supervise-daemon"
+pidfile="/run/platina-camera.pid"
+respawn_delay=5
+respawn_max=5
+respawn_period=1800
+output_log="/var/log/platina-camera.log"
+error_log="/var/log/platina-camera.log"
+
+depend() {
+    need localmount
+    use networkmanager
+    after udev-trigger
+}
+
+start_pre() {
+    checkpath --file --mode 0640 --owner root:root "$output_log"
+    checkpath --directory --mode 0700 --owner root:root /etc/platina-camera
+}

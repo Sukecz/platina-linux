@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: CC0-1.0
+# IMX363 black level plus the upstream software ISP algorithms.
+# Manual white balance is linear; saturation uses the consumer's SIMD path.
+# The investigated DNG CCM is nearly identity and is not enabled here.
+%YAML 1.1
+---
+version: 1
+algorithms:
+  - BlackLevel:
+      blackLevel: 4096
+  - Awb:
+  - Adjust:
+  - Agc:
+...

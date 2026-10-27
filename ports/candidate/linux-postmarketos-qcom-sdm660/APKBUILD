@@ -3,7 +3,7 @@ maintainer="Alexey Minnekhanov <alexeymin@minlexx.ru>"
 _flavor="postmarketos-qcom-sdm660"
 pkgname=linux-$_flavor
 pkgver=7.2.12
-pkgrel=1
+pkgrel=12
 pkgdesc="Close to mainline linux kernel for Qualcomm Snapdragon 660 SoC"
 arch="aarch64"
 url="https://kernel.org/"
@@ -26,6 +26,7 @@ makedepends="
 	zstd
 	pahole
 	linux-headers
+	kmod
 	elfutils-dev
 	"
 
@@ -57,6 +58,15 @@ source="
 	0028-platina-touch-regulator-cleanup.patch
 	0029-sdm660-mdp-clock-safe-rate-change.patch
 	0030-platina-tianma-panel.patch
+	0031-media-i2c-imx363.patch
+	0032-platina-rear-camera.patch
+	0033-camss-sdm660-ispif.patch
+	0034-camss-sdm660-ispif-power-votes.patch
+	0035-camss-sdm660-phy-clock-rates.patch
+	0036-platina-rear-focus.patch
+	0037-imx363-full-field-binning.patch
+	0038-imx363-platina-legacy-frequency.patch
+	0039-venus-legacy-h264-transform.patch
 	stable-7.2.3-4.patch
 	stable-7.2.4-5.patch
 	stable-7.2.5-6.patch
@@ -119,7 +129,7 @@ package() {
 }
 sha512sums="
 b56636f4d7429e971a70c1b7237fda4d5795fbe422c01f6fc6038220c2e831bf4479bd411b5e04e4db45de4fb8ec15a9e0e312b6479e2067709062af3dfd6997  linux-dd1ed52c8ceef4f16715118ed0252fe75adbe71d.tar.gz
-2a21ce86163c1f33d2fc8bf1d84823c4c6221f67abdcb32e7a11f27325eb5dc7ffc968bc56d15b469aa5aa4b8381ba077e6abe018bd69a69049124e331228304  config-postmarketos-qcom-sdm660.aarch64
+25f1d9cd84243a011d14a25b55f76857522ebc2b7c4ccea36dea59e8f8aa36d27069daf6ee57292c9800fb4eabcfc0c8767fb0c98f045b40dd2f81ace632e859  config-postmarketos-qcom-sdm660.aarch64
 0ed47ad2e1cf773a49ab542b4f6ccc2baf61a4186e51cda8f70bacce6c30c687305f8c7f327cdd9b3919358ca18eaac28c7c9b82bfec73e5fe492663afdec825  0001-platina-enable-display.patch
 83b9efa9b1a46499d1936f9e3f90b832458ace687a5ad3892ae1787a09997491efb9cc1bb0db44007adda97900ae2e3ce1b7dafa28ecb4cd84a95ade8667f05b  0002-panel-simple-td4320.patch
 2ff1034abfbaf3c5bf56233b46a6c5a066015a982d4e55e5fd34c5d908d145305c7a99fd7731057b8fd5b9afc3e595b60856f6e0a0af921cfbff068eb744757b  0004-synaptics-tcm-driver.patch
@@ -143,6 +153,15 @@ ae97edcc2302b088a3d83539139199e9f5a19c3a11f66a3512b979b93673755f300b6458f7ddfaaa
 c04261993d81ae94ae8f6e86df93e6e37390fd8b7746f8d54eaf957e818cdf92691fdeb8b9a5adae220fcd199189aea268c837b6482e13a70a9de9aeaafaacc5  0028-platina-touch-regulator-cleanup.patch
 07f552abed2177d7c0a4fd731692c934d54f8ad4d117ecad3e1eab4ceedd546b07c6fc01c693dae65a09fc1581b987db4bb7f3cdffa4488b20919a32a1790621  0029-sdm660-mdp-clock-safe-rate-change.patch
 e845d83a8bb8e7bb7cc59bb309b78b920460f4d31b9c962e00119321e3f01a65bfcc2cc3185d609a0b99a73c9deed5d705d58afdf06d8dac2e409ad15f821d68  0030-platina-tianma-panel.patch
+812f71e8752570036ed74c06c5ad28a84269a6ed137335d51af887a7084c20bb9aa533603c771afd12b11867b2d65cee9300ad13e8c68bb33b2fd0668a2236cb  0031-media-i2c-imx363.patch
+11cbf744686f28317e44cbebf48bbde98d287f818e447a26417d7246dad959228b4c62233914ffd13af6cb77d867af060eea3755a873484008f17ef8a8626fbc  0032-platina-rear-camera.patch
+cf94af7b03cff9d08bc2b581f7bbc8bf3bc1f1b1a826f5715c1853b2a7ad856beacce07ce442586ba67b43ca2a6fbac6479a985a0033c65f808ef42d7d63d9e2  0033-camss-sdm660-ispif.patch
+73d684cc1e21454f9b065930ee93a3edfc61154f0765c457f26afb23df18b2261ace202c4b34754d175434e8f258f1d234ae11c8c80cb7c6c22c500ed174ec87  0034-camss-sdm660-ispif-power-votes.patch
+c2930b7daca8ccc6af37232fff7395cbbb8062aa413554aa7a6aa17f83480cc6d554b5941e22ee958426a2ced9a223037bdd945c0658abdc13b4da55d7ff88c8  0035-camss-sdm660-phy-clock-rates.patch
+ecfee5c3fde9c5342195d5e25f7103d909144d9602497aa4de713fc55d9c03f89601081535d43da74002d147295f554f445c6ccb74813a1cce8de71d48df800a  0036-platina-rear-focus.patch
+62031fc20f13bec1bc9a0a67134a2967acbf76cd2d9d3eea9cf5d8176d5bbe61e0063b165b9caf959ec8d923fbb8897cb7421c723d38d695da51a2cb3eddf6c2  0037-imx363-full-field-binning.patch
+b1094708de883b3aecaf52ddc7f9315c150f6234165ab02ef7a021bc18da4d56cc5eab0f9239583a3b596c307ef71b891f0d735d889156e783b7bb21ba26b448  0038-imx363-platina-legacy-frequency.patch
+61a598e63d83c0489ba130231cd0a4c2dc4351de5c122cef9b7170f7f516bae7573c744535035c53e2642a96d13fe5048c07e4c908de8f64c90a3cd8809ee84c  0039-venus-legacy-h264-transform.patch
 1a7f9cf2443c0f059ac64a78dddee77fca584288edeea943aa45db05fb5e3b7b2930dab595f6c0911671bf5517bd64550a65b097f47d5179cc7454ec90db56cd  stable-7.2.3-4.patch
 303d4a717c67d5dbb5d17c37882b3ef1b6b44b3cf9b17723a611efe1f028019d5ef53c0e3595ed79f5468a46ede2d640171b9dd97ce2dd99b487d0406ef79f16  stable-7.2.4-5.patch
 b09a94d0eb3c0382ad8998843019ea0d52ae5a89ad7ba54072b21eeea2c7ee602c57a32a0d9b99a2c5ae1f581dadc4d4395096e905b54678affc18125d9b8cba  stable-7.2.5-6.patch

@@ -39,6 +39,33 @@ Tianma panel reference
 - GPL-2.0-only downstream panel data, with variant values recorded from matching
   stock panel data. Exact reference hashes are in tianma-reference.json.
 
+Camera sensor reference
+- Intel Corporation and the IMX363 module authors, carried by sdm845-mainline.
+- https://gitlab.com/sdm845-mainline/linux/-/blob/85f1df2a4ec71d7a91dd95a7a49f889d1595ffa8/drivers/media/i2c/imx363.c
+- GPL-2.0 driver; original copyright and module author declarations retained.
+- Platina camera wiring is derived from the Xiaomi GPL-2.0-only device tree
+  referenced above. Proprietary Android camera libraries are not distributed.
+
+libcamera and camera userspace
+- libcamera contributors, including the authors named in retained source and
+  patch headers; IMX363 properties/gain support credits Samuel LEGROS.
+- https://libcamera.org/ and https://patchwork.libcamera.org/patch/28201/
+- The camera recipe fetches libcamera 0.7.1 under its upstream LGPL/GPL/component
+  licenses. Changes to LGPL libcamera sources and the explicitly marked sensor
+  conversion/crop helpers retain LGPL-2.1-or-later terms. The original capture
+  consumer is GPL-2.0-only. This does not relicense upstream libcamera.
+- The full upstream source and its notices are fetched during builds. No IPA
+  signing private keys, proprietary Android camera libraries or calibration
+  dumps are distributed here.
+
+Mesa, libyuv and camera runtime dependencies
+- Mesa/Freedreno contributors: https://mesa3d.org/ (the fetched package declares
+  MIT, SGI-B-2.0 and BSL-1.0 component licenses; preserve upstream notices).
+- libyuv contributors: https://chromium.googlesource.com/libyuv/libyuv/
+- ALSA, Paho MQTT, libjpeg-turbo and the remaining external packages retain their
+  own licenses. This repository supplies recipes/integration, not their full
+  source trees or a replacement blanket license.
+
 External dependencies
 - pmbootstrap (GPLv3), the full kernel and distro packages are fetched
   from pinned upstream sources during preparation/build. Their original notices
@@ -51,6 +78,6 @@ Firmware
   It does not restrict the GPL-2.0-only recipe/helper source written here.
 - No redistribution permission for those payloads is granted by this repository.
 
-License texts: LICENSE (GPLv2), LICENSES/GPL-3.0, LICENSES/MIT and
+License texts: LICENSE (GPLv2), LICENSES/GPL-3.0, LICENSES/LGPL-2.1, LICENSES/MIT and
 LICENSES/BSD-2-Clause. Upstream copyright and license notices take precedence
 for inherited material. See docs/LICENSING.md for scope and source links.

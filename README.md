@@ -4,107 +4,94 @@
 
 # Platina Linux for Xiaomi Mi 8 Lite
 
-Turn a **Xiaomi Mi 8 Lite (platina, M1808D2TG, Qualcomm Snapdragon 660 / SDM660)**
-into a small **headless Linux server** with Wi-Fi, USB networking and SSH.
-Platina Linux is a device integration built on **postmarketOS and Alpine Linux**,
-using the SDM660 mainline-oriented kernel port. It boots Linux directly from eMMC;
-this is not Android, a container inside Android, or a desktop phone OS.
+Turn a **Xiaomi Mi 8 Lite (platina, M1808D2TG, Snapdragon 660 / SDM660)** into
+an ARM64 **headless Linux server** with Wi-Fi, USB networking and key-only SSH.
+Built on postmarketOS and Alpine Linux, it boots directly from eMMC.
 
 [![Source checks](https://github.com/Sukecz/platina-linux/actions/workflows/check.yml/badge.svg)](https://github.com/Sukecz/platina-linux/actions/workflows/check.yml)
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](LICENSE)
 [![Device: Xiaomi Mi 8 Lite](https://img.shields.io/badge/device-Xiaomi_Mi_8_Lite-ff6900)](docs/HARDWARE.md)
 
-**Verified existing-installation integration: 0.3.1** · **Kernel: 7.2.12-r1 / 7.2.12-sdm660** · **Development / early hardware testing**
+**Integration: 0.8.1 · Development / early hardware testing · Source-only release**
 
-**Source/build integration: 0.3.1.** Fresh image builds include both screens,
-display helpers and the shutdown service. The tested phone was updated in place
-to 0.3.1, with screen preview and normal restart verified. The newly built full
-installation image passed offline audits and has not been flashed as a full image.
+The existing test phone runs 0.8.1 with a rear-camera MJPEG stream, optional
+browser microphone listening, compact controls and digital zoom up to 10×.
+Capture is OFF after startup. This is a tested existing-installation update,
+not a fully qualified new installation image or a complete smartphone OS.
 
-[Installation](docs/INSTALLATION.md) · [Build from source](docs/BUILDING.md)
-· [Display development](docs/DISPLAY.md) · [Shutdown](docs/SHUTDOWN.md)
-· [Changelog](CHANGELOG.md) · [Licensing](docs/LICENSING.md)
+[Installation](docs/INSTALLATION.md) · [Build](docs/BUILDING.md)
+· [Camera, audio and Home Assistant](docs/CAMERA.md)
+· [Display](docs/DISPLAY.md) · [Shutdown](docs/SHUTDOWN.md)
+· [Changelog](CHANGELOG.md) · [Releases](https://github.com/Sukecz/platina-linux/releases)
 
-## What it does
+## Camera and compact controls
 
-- **Real Linux on the phone:** an ARM64 Alpine userspace, package manager and OpenRC services.
-- **Remote administration:** key-only OpenSSH over Wi-Fi or the USB network gadget,
-  with root login and SSH password login disabled.
-- **Reconnect automatically:** NetworkManager restores the configured Wi-Fi connection;
-  USB networking provides a separate local administration path.
-- **Headless by default:** keep the backlight dark while running background services.
-- **Battery and charger operation:** use Wi-Fi while running on the battery or a separate charger.
-- **Integrated Tianma display:** boot logo, brightness and ten repeated display
-  off/on cycles have been physically verified. Full LCD rail shutdown remains pending.
-- **Repeatable development:** pinned source revisions, versioned recipes, checksum
-  verification, offline tests and separate build/export/audit steps.
+The main web panel contains **zoom, focus, JPEG quality, resolution and audio**.
+Exposure, white balance, colors and orientation are in the **Advanced / Pokročilé**
+dialog. Desktop and mobile layouts were checked without page scrolling.
+The header shows actual FPS, resolution and a millisecond processing label
+(frame age since the sensor timestamp, including waiting/processing).
 
-The goal is a practical always-on server. **Long-term 24/7 stability and sustained
-power balance have not yet been qualified.** Existing phone components keep their
-own support limits; this project does not claim full smartphone functionality.
+- **Digital zoom 1–10×:** a centered crop in the shared image pipeline, so a web
+  zoom change also appears in the Home Assistant image. Resolution stays fixed;
+  digital zoom cannot add missing detail.
+- **Six output sizes:** 12, 5.4, 3, 1.3, 0.75 and 0.33 MP. At 1× zoom they retain
+  the full sensor field of view. JPEG quality ranges from 10 to 95.
+- **Exposure and white balance:** automatic/manual modes, live sensor time/gain
+  telemetry, manual focus and color controls. The capture target is fixed at
+  30 FPS; observed output rates depend on scene, resolution and processing load.
+- **Browser audio:** explicit microphone ON/OFF and volume control. Audio and
+  MJPEG remain separate and are not precisely synchronized.
+- **Home Assistant:** MQTT Discovery controls and a shared MJPEG/snapshot output.
+  The current HA MJPEG camera **does not carry audio**. A unified A/V stream is
+  deferred; no always-on transcoder or external server is required by this release.
+
+Open `http://platina.local:8082/` on your own qualified installation.
+The service has no user login: keep it on a trusted network or behind an
+appropriate authenticated proxy/VPN. See the [camera guide](docs/CAMERA.md)
+for source builds, credentials, startup policy and qualification limits.
 
 ## Feature status
 
-**Last reviewed: 2026-10-23.** Status describes tests on the maintainer's Mi 8 Lite,
-not a guarantee for every device or panel variant.
+Last reviewed **2026-10-27**, on the maintainer's Tianma Mi 8 Lite.
+🟢 Verified · 🟠 Partial / awaiting qualification · 🔴 Unsupported / not working
 
-🟢 **Verified** · 🟠 **Partial / prepared / awaiting hardware testing** · 🔴 **Not working / unsupported**
-
-| Feature | Status | What has been verified |
+| Feature | Status | Evidence and limits |
 |---|:---:|---|
-| Linux boot from internal eMMC | 🟢 | Installed system, normal startup and repeated restarts |
-| ARM64 userspace and OpenRC | 🟢 | postmarketOS v26.06 / Alpine; services start after boot |
-| SSH over Wi-Fi | 🟢 | Direct LAN login with an administrator key |
-| SSH over USB networking | 🟢 | USB gadget administration on a Linux host |
-| SSH authentication hardening | 🟢 | Password and root SSH login disabled; administrator uses sudo |
-| Wi-Fi reconnect | 🟢 | Reconnect after radio recovery; network configuration persists |
-| USB network recovery | 🟢 | Software disconnect/reconnect and address recovery |
-| mDNS hostname | 🟢 | `platina.local` on a compatible local network |
-| eMMC / ext4 storage | 🟢 | Read/write root filesystem and offline image checks |
-| Battery operation | 🟢 | Wi-Fi administration with data USB physically disconnected |
-| Separate charger operation | 🟢 | Operation and charging confirmed with a suitable charger/cable |
-| Battery / thermal telemetry | 🟢 | Battery information and CPU, GPU and battery temperature readings |
-| Physical shutdown buttons and screen | 🟢 | Power + Volume Up held for 3 s, release both; Power off logo and battery shutdown physically verified |
-| Staying off while USB power is connected | 🔴 | Accepted limitation: disconnect USB/charger before shutdown; otherwise the bootloader starts Linux again |
-| Short boot logo | 🟢 | Automatic logo and subsequent shutdown physically confirmed after normal boot in 0.2.0 |
-| Integrated Tianma NT36672A panel driver | 🟢 | Kernel 7.2.12-r1: RAM boot, normal eMMC boot, image and ten off/on cycles verified |
-| Display power, brightness and custom images | 🟠 | Brightness and driver powerdown verified; VSP/VSN remain fixed always-on. Custom-image conversion tested offline |
-| Beszel monitoring | 🟠 | Native monitoring tested separately; optional custom hub/power-chart integration is outside this source base |
-| VPN access from outside the home network | 🟠 | A LAN jump-host route was tested; a real off-site client test is pending |
-| Continuous 48–72-hour uptime | 🟠 | Qualification is pending; shorter successful tests are not a soak test |
-| Sustained charging / wall power use | 🟠 | Short charger tests passed; long-term balance and wall-meter measurements are pending |
-| CPU frequency scaling | 🟠 | Port/platform limitation; no supported full scaling claim |
-| Audio, Bluetooth, camera and SD card | 🟠 | Not functionally qualified by this project |
-| Touchscreen on the tested device | 🔴 | Controller initialization fails; headless administration is unaffected |
-| Mobile calls / mobile data | 🔴 | Outside the supported headless-server feature set |
-| Android apps / Android services | 🔴 | This system replaces the running Android environment |
-| Other Xiaomi Mi 8 models / other phones | 🔴 | This port targets **Mi 8 Lite / platina only** |
+| Linux boot from eMMC, ARM64 Alpine and OpenRC | 🟢 | Normal starts and repeated restarts |
+| Key-only SSH over Wi-Fi and USB networking | 🟢 | Administrator login; password/root SSH login disabled |
+| Wi-Fi reconnect, USB recovery and mDNS | 🟢 | Tested recovery paths and local hostname |
+| eMMC / ext4 and battery operation | 🟢 | Installed system and physically disconnected data USB operation |
+| Separate charger operation | 🟢 | Short physical charging/operation tests |
+| Battery / CPU / GPU thermal telemetry | 🟢 | Readings available; state-of-charge accuracy and low-battery policy need work |
+| Tianma NT36672A display | 🟢 | Boot logo, brightness and ten off/on cycles tested |
+| Full display power removal | 🟠 | VSP/VSN remain fixed always-on; full rail shutdown/power savings unproven |
+| Power + Volume Up shutdown | 🟢 | Hold both 3 seconds, release both; physical battery shutdown tested |
+| Staying off with USB/charger attached | 🔴 | Disconnect external power before shutdown; charger boot starts Linux again |
+| Rear camera, web controls and HA MJPEG | 🟠 | Live 2008×2680 MJPEG/zoom/UI checked; color, exposure response and long-term qualification remain limited |
+| Browser microphone | 🟠 | PCM playback/lifecycle checked; subjective quality and synchronized A/V not qualified |
+| H.264 / shared video and audio in HA | 🔴 | Deferred; Venus is not a working hardware encoder path |
+| Continuous 48–72-hour operation / sustained power balance | 🟠 | Qualification pending; short tests are not a soak test |
+| Off-site VPN access | 🟠 | Local jump route checked; real off-site client test pending |
+| CPU frequency scaling | 🟠 | No supported full DVFS claim |
+| Bluetooth and SD card | 🟠 | Not functionally qualified |
+| Touchscreen on this device | 🔴 | Controller initialization fails |
+| Mobile calls/data and Android apps | 🔴 | Outside this headless integration |
 
-To switch the phone off and keep it off, **disconnect USB/the charger first**,
-hold **Power + Volume Up for at least 3 seconds**, then release both buttons.
-The Platina logo and Power off screen appear during shutdown. The shutdown
-service is enabled; experimental PMIC trigger changes are not loaded automatically.
+## Build and installation boundaries
 
-The checked-in candidate sources are **kernel 7.2.12-r1 + device 5-r31**. The
-physically verified 0.2.0 installation uses that kernel with device 5-r30 and
-the documented runtime initramfs adjustments. The public firmware recipe is 2-r5, with a newly written packaging
-helper; proprietary firmware payloads are supplied locally by each builder.
-No prebuilt installation images or binary firmware are published here.
+The tested camera installation uses **kernel 7.2.12-sdm660, r9 boot plus r11
+sensor module**, with signed `platina-libcamera` **0.7.1-r31** and isolated Mesa
+26.1.6. The checked-in kernel recipe is the **7.2.12-r12 development candidate**,
+with device 5-r31 and the public source firmware recipe 2-r5. That combined kernel
+and a new full 0.8.1 image have **not** passed a complete hardware installation test.
+Camera packages are built/installed separately; `make images` does not yet add them.
 
-## Hardware
-
-**Tested:** Xiaomi Mi 8 Lite, model **M1808D2TG**, codename **platina**, Snapdragon 660,
-4 GB RAM / 64 GB eMMC, **Tianma NT36672A 1080 × 2280 LCD**.
-Other RAM/storage variants and BOE panel variants are not qualified. Check the
-codename and actual panel before using the display candidate. The Mi 8, Mi 8 SE,
-Mi 8 Pro and Mi 8 Lite are different devices.
-
-## Getting started
-
-You need an unlocked bootloader, a Linux build host, your own SSH public key,
-matching stock firmware inputs and a recovery plan. **Initial installation erases
-Android user data.** Follow the [installation guide](docs/INSTALLATION.md), including
-its backup, device identification and RAM-test stages before a permanent flash.
+No prebuilt APKs, boot/rootfs images, proprietary firmware or calibration data
+are published. Provide your own administrator public key and matching firmware,
+retain a verified recovery path, and qualify each new kernel/image on your device.
+Initial installation erases Android user data. See [installation](docs/INSTALLATION.md)
+and [building](docs/BUILDING.md) before any flash.
 
 ```sh
 git clone https://github.com/Sukecz/platina-linux.git
@@ -113,28 +100,24 @@ make doctor
 make check
 ```
 
-The public tree contains the current port recipes, build and audit tools,
-display sources, regression tests and documentation. Configuration, firmware,
-phone backups and generated images remain local.
+To stay powered off, **disconnect USB/the charger**, hold **Power + Volume Up
+for at least 3 seconds**, then release both. Attached power triggers a charger-mode
+boot; this accepted limitation is not changed by the camera release.
 
-## Updating this project
-
-The table above is maintained alongside code changes. A successful compilation
-means **built**, an offline audit means **audited**, and a physical phone test means
-**hardware verified**. These states are recorded separately.
-
-Platina's integration version lives in `project/release.json`; it is independent
-of the Linux and Alpine version numbers. Integration 0.2.0 records the physically tested Tianma driver; 0.3.0 adds
-the shutdown chord and screen. Display rail and USB charger-boot limits are documented.
+Only **Mi 8 Lite / platina** and the tested **Tianma NT36672A** panel are qualified
+here. Other Mi 8 models and BOE panel variants need their own integration/tests.
+Integration versions are separate from kernel and Alpine package versions.
 
 ## Credits and license
 
 Built on [postmarketOS](https://postmarketos.org/), [Alpine Linux](https://alpinelinux.org/),
-[SDM660 mainline](https://github.com/sdm660-mainline/linux) and the
+[SDM660 mainline](https://github.com/sdm660-mainline/linux),
+[libcamera](https://libcamera.org/), [Mesa](https://mesa3d.org/) and the
 [community Mi 8 Lite port](https://github.com/macosmojave2-alt/postmarket-mi8lite-platina).
-The panel sequence is based on Xiaomi's published kernel sources and matching
-stock panel data. Original authors and source notices are retained.
+Xiaomi's published kernel sources provide device/panel reference data.
+Original authors, SPDX declarations and upstream notices are retained.
 
-**Original Platina contributions: GPL-2.0-only.** Third-party code retains its
-own licenses; firmware remains proprietary and is not included. See
-[LICENSE](LICENSE), [NOTICE](NOTICE) and the [licensing notes](docs/LICENSING.md).
+Original integration contributions are **GPL-2.0-only** unless marked otherwise;
+libcamera-derived code and helpers retain their LGPL terms. Firmware remains
+proprietary and is not included. See [LICENSE](LICENSE), [NOTICE](NOTICE) and
+[licensing](docs/LICENSING.md).

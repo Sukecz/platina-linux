@@ -1,0 +1,43 @@
+From: Platina Linux contributors
+Subject: [PATCH] media: qcom: camss: provide SDM660 PHY clock rate tables
+
+SDM660 requires csiX_phy >= csiphyX_timer. The selection logic is present
+but skips csiX_phy because its resource clock_rate table contains only 0.
+Observed during a real Platina IMX363 stream: timer 100MHz, csi0_phy 19.2MHz;
+the sensor frame counter increments, and CSID internal testgen reaches RAM,
+but external sensor data produces no VFE SOF. Give the PHY the same existing
+supported levels as its timer so the intended selection logic runs.
+
+Reference: AngeloGioacchino Del Regno, tested Sony Xperia XA2 SDM630 series,
+https://lkml.iu.edu/2010.2/01479.html
+This restores the requirement from the original SDM630/660 CAMSS port.
+
+--- a/drivers/media/platform/qcom/camss/camss.c
++++ b/drivers/media/platform/qcom/camss/camss.c
+@@ -830,7 +830,7 @@
+ 				{ 0 },
+ 				{ 0 },
+ 				{ 100000000, 200000000, 269333333 },
+-				{ 0 } },
++				{ 100000000, 200000000, 269333333 } },
+ 		.reg = { "csiphy0", "csiphy0_clk_mux" },
+ 		.interrupt = { "csiphy0" },
+ 		.csiphy = {
+@@ -849,7 +849,7 @@
+ 				{ 0 },
+ 				{ 0 },
+ 				{ 100000000, 200000000, 269333333 },
+-				{ 0 } },
++				{ 100000000, 200000000, 269333333 } },
+ 		.reg = { "csiphy1", "csiphy1_clk_mux" },
+ 		.interrupt = { "csiphy1" },
+ 		.csiphy = {
+@@ -868,7 +868,7 @@
+ 				{ 0 },
+ 				{ 0 },
+ 				{ 100000000, 200000000, 269333333 },
+-				{ 0 } },
++				{ 100000000, 200000000, 269333333 } },
+ 		.reg = { "csiphy2", "csiphy2_clk_mux" },
+ 		.interrupt = { "csiphy2" },
+ 		.csiphy = {

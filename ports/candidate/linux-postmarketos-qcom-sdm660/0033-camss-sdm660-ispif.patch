@@ -1,0 +1,35 @@
+From: Platina Linux contributors
+Subject: [PATCH] media: qcom: camss: restore SDM660 ISPIF and CSI mux
+
+The SDM660 resource table provides ISPIF and camss-ispif.c already handles
+CAMSS_660, but camss_probe() omits this version from allocation. The null
+ISPIF silently creates a direct CSID -> VFE graph which does not match the
+hardware. Include SDM660 in the existing ISPIF allocation condition.
+Observed on Platina: sensor identity succeeds, direct graph never delivers
+SOF and times out. This change restores the hardware path, not a bypass. Map the existing
+SDM660 CSIPHY clock-mux resource as on the other legacy ISPIF platforms.
+
+--- a/drivers/media/platform/qcom/camss/camss.c
++++ b/drivers/media/platform/qcom/camss/camss.c
+@@ -5388,7 +5388,8 @@
+ 	if (camss->res->version == CAMSS_8x16 ||
+ 	    camss->res->version == CAMSS_8x39 ||
+ 	    camss->res->version == CAMSS_8x53 ||
+-	    camss->res->version == CAMSS_8x96) {
++	    camss->res->version == CAMSS_8x96 ||
++	    camss->res->version == CAMSS_660) {
+ 		camss->ispif = devm_kcalloc(dev, 1, sizeof(*camss->ispif), GFP_KERNEL);
+ 		if (!camss->ispif)
+ 			return -ENOMEM;
+--- a/drivers/media/platform/qcom/camss/camss-csiphy.c
++++ b/drivers/media/platform/qcom/camss/camss-csiphy.c
+@@ -606,7 +606,8 @@
+ 	if (camss->res->version == CAMSS_8x16 ||
+ 	    camss->res->version == CAMSS_8x39 ||
+ 	    camss->res->version == CAMSS_8x53 ||
+-	    camss->res->version == CAMSS_8x96) {
++	    camss->res->version == CAMSS_8x96 ||
++	    camss->res->version == CAMSS_660) {
+ 		csiphy->base_clk_mux =
+ 			devm_platform_ioremap_resource_byname(pdev, res->reg[1]);
+ 		if (IS_ERR(csiphy->base_clk_mux))

@@ -1,9 +1,12 @@
 # Building Platina Linux
 
-This is a source-only development port. Kernel 7.2.12-r1 and the 0.3.1 in-place
-runtime update were tested on a Tianma Mi 8 Lite. Source version 0.3.1 integrates
-that runtime into newly built images; the new full image still requires its own
-hardware acceptance. There is no ready-made stable release.
+This is a source-only development port. Integration **0.8.1**, signed camera
+userspace **0.7.1-r31** and the existing r9-boot/r11-sensor runtime combination
+were checked on one Tianma Mi 8 Lite. The public kernel recipe is **7.2.12-r12**,
+a development candidate, not the exact tested boot/modules combination.
+A combined r12 kernel and a new full 0.8.1 installation image are not hardware
+qualified. The last full base image was built/audited for 0.3.1.
+Camera packages are separate; see [CAMERA.md](CAMERA.md).
 
 ## Build host
 
@@ -14,7 +17,7 @@ It uses two jobs at nice level 10. No host services or phones are restarted.
 On Debian/Ubuntu, typical host tools are:
 
 ```sh
-sudo apt install git python3 make sudo openssh-client e2fsprogs util-linux kmod mtools fastboot
+sudo apt install git g++ python3 make sudo openssh-client e2fsprogs util-linux kmod mtools fastboot
 # Required for the versioned boot/shutdown screens included by make images.
 sudo apt install python3-pil fonts-dejavu-core
 ```
@@ -23,6 +26,7 @@ sudo apt install python3-pil fonts-dejavu-core
 and package dependencies are installed inside the build chroots by pmbootstrap.
 Python's standard library is enough for the basic offline test suite; the image
 runtime integration tests and full image builder also need Pillow and DejaVu Sans.
+Camera conversion/crop tests compile small native C++ programs with `g++`.
 
 ## Personal build inputs
 
@@ -115,3 +119,15 @@ The original logo is preserved; the integration version is added during renderin
 These commands create separate local bundles for review or an explicitly planned
 existing-installation update. A fresh `make images` already includes both release
 screens. See [display setup](DISPLAY.md) and [shutdown behavior](SHUTDOWN.md).
+
+## Camera packages
+
+After preparing the candidate environment, build the isolated Mesa and camera
+packages locally with `scripts/build-camera-userspace.py`; see the complete
+[camera guide](CAMERA.md#source-build-and-installation-boundary). The camera
+package pins libcamera 0.7.1-r31 and the active control/GPU patches. Inactive DMA,
+LUT and other rejected experiment patches are not part of this source release.
+No camera credentials, host-specific deployment helpers or prebuilt APKs are
+included. `make images` currently integrates the base display/shutdown runtime,
+not the separately installed camera packages. Do not describe such an image as
+a fully tested 0.8.1 camera installation.
